@@ -11,6 +11,13 @@ xcrun --sdk iphoneos clang -arch arm64 -target arm64-apple-ios16.0 -isysroot "$s
  -framework Foundation -framework UIKit -framework WebKit -framework AuthenticationServices \
  -framework SafariServices -framework Security Shixu/main.m -o "$app/Shixu"
 cp Shixu/Info.plist "$app/Info.plist"
+# SideStore builds before 2026-09-12 send the raw display name to Apple's
+# ASCII-only App ID registration. Keep that name ASCII; localize the iOS label.
+display_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$app/Info.plist")"
+[[ "$display_name" =~ ^[A-Za-z0-9][A-Za-z0-9\ ]*$ ]]
+mkdir -p "$app/zh-Hant.lproj"
+printf '"CFBundleDisplayName" = "拾序";\n' > "$app/zh-Hant.lproj/InfoPlist.strings"
+plutil -lint "$app/zh-Hant.lproj/InfoPlist.strings"
 plutil -insert DTPlatformName -string iphoneos "$app/Info.plist"
 plutil -insert DTSDKName -string "iphoneos$(xcrun --sdk iphoneos --show-sdk-version)" "$app/Info.plist"
 cp Shixu/ShixuLogo.png "$app/ShixuLogo.png"

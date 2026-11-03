@@ -7,6 +7,7 @@
 - 使用 WKWebView 的持久資料容器；與 Safari/PWA 分開。首次登入後沿用原有 Google 雲端還原與衝突檢查，保留原 PWA 資料。
 - 原生啟動畫面使用既有拾序圖示；不新增 App extension。
 - 簽署由現有 SideStore 在手機完成；建置端不接觸 Apple 帳號、P12、憑證或配對檔。
+- 相容現有 SideStore 2026-09-11：簽署使用 ASCII 名稱 `Shixu`；繁體中文 iPhone 的主畫面名稱由 `zh-Hant/InfoPlist.strings` 顯示為「拾序」。Bundle ID 固定為 `app.shixu.studio`，不另占新的 App ID。
 
 ## 建置
 

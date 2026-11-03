@@ -1,14 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
- <key>CFBundleDisplayName</key><string>拾序</string>
+ <key>CFBundleDisplayName</key><string>Shixu</string>
+ <key>CFBundleDevelopmentRegion</key><string>en</string>
+ <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hant</string></array>
  <key>CFBundleName</key><string>Shixu</string>
  <key>CFBundleExecutable</key><string>Shixu</string>
  <key>CFBundleIdentifier</key><string>app.shixu.studio</string>
  <key>CFBundlePackageType</key><string>APPL</string>
  <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
- <key>CFBundleShortVersionString</key><string>1.0.0</string>
- <key>CFBundleVersion</key><string>1</string>
+ <key>CFBundleShortVersionString</key><string>1.0.1</string>
+ <key>CFBundleVersion</key><string>2</string>
  <key>MinimumOSVersion</key><string>16.0</string>
  <key>LSRequiresIPhoneOS</key><true/>
  <key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>
