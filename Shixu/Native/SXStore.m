@@ -12,8 +12,9 @@ static BOOL ValidValues(id values){
  NSRegularExpression *notes=[NSRegularExpression regularExpressionWithPattern:@"^note\\.[A-Z0-9.\\-]{1,16}$" options:0 error:nil];
  for(id key in values){if(![key isKindOfClass:NSString.class])return NO;id value=values[key];BOOL note=[notes firstMatchInString:key options:0 range:NSMakeRange(0,[key length])]!=nil;if(![ProfileKeys() containsObject:key]&&!note)return NO;if(note&&![value isKindOfClass:NSString.class])return NO;if([lists containsObject:key]&&![value isKindOfClass:NSArray.class])return NO;if([objects containsObject:key]&&![value isKindOfClass:NSDictionary.class])return NO;}
  id account=values[@"account.v1"];if(account){if(![account[@"cash"] isKindOfClass:NSArray.class]||![account[@"positions"] isKindOfClass:NSArray.class])return NO;
-  for(id row in account[@"cash"])if(![row isKindOfClass:NSDictionary.class]||!Text(row[@"id"])||!Finite(row[@"amount"])||fabs([row[@"amount"] doubleValue])>1e15||![@[@"USD",@"TWD"] containsObject:row[@"currency"]?:@""]||!Text(row[@"date"]))return NO;
-  for(id row in account[@"positions"])if(![row isKindOfClass:NSDictionary.class]||!Text(row[@"id"])||!Text(row[@"code"])||!Finite(row[@"quantity"])||[row[@"quantity"] doubleValue]<=0||[row[@"quantity"] doubleValue]>1e15||!Finite(row[@"cost"])||[row[@"cost"] doubleValue]<=0||[row[@"cost"] doubleValue]>1e15||![@[@"USD",@"TWD"] containsObject:row[@"currency"]?:@""])return NO;
+  NSMutableSet *cashIDs=[NSMutableSet new],*positionIDs=[NSMutableSet new];
+  for(id row in account[@"cash"]){if(![row isKindOfClass:NSDictionary.class]||!Text(row[@"id"])||[cashIDs containsObject:row[@"id"]]||!Finite(row[@"amount"])||fabs([row[@"amount"] doubleValue])>1e15||![@[@"USD",@"TWD"] containsObject:row[@"currency"]?:@""]||!Text(row[@"date"]))return NO;[cashIDs addObject:row[@"id"]];}
+  for(id row in account[@"positions"]){if(![row isKindOfClass:NSDictionary.class]||!Text(row[@"id"])||[positionIDs containsObject:row[@"id"]]||!Text(row[@"code"])||!Finite(row[@"quantity"])||[row[@"quantity"] doubleValue]<=0||[row[@"quantity"] doubleValue]>1e15||!Finite(row[@"cost"])||[row[@"cost"] doubleValue]<=0||[row[@"cost"] doubleValue]>1e15||![@[@"USD",@"TWD"] containsObject:row[@"currency"]?:@""])return NO;[positionIDs addObject:row[@"id"]];}
  }
  for(id row in values[@"runs"]?:@[])if(![row isKindOfClass:NSDictionary.class]||!Text(row[@"id"])||!Text(row[@"code"]))return NO;
  for(id code in values[@"watch"]?:@[])if(!Text(code))return NO;
@@ -29,6 +30,7 @@ static BOOL ValidValues(id values){
 @property(nonatomic,strong) NSURL *profileURL;
 @property(nonatomic,readwrite) NSArray *directory;
 @property(nonatomic,readwrite) NSString *persistenceError;
+@property(nonatomic,strong) NSError *lastWriteError;
 @end
 @implementation SXStore
 + (instancetype)sharedStore {static SXStore *store;static dispatch_once_t once;dispatch_once(&once,^{store=[SXStore new];});return store;}
@@ -61,12 +63,12 @@ static BOOL ValidValues(id values){
 #if DEBUG
  if([NSProcessInfo.processInfo.arguments containsObject:@"--ui-fixtures"]){[NSNotificationCenter.defaultCenter postNotificationName:SXStoreDidChangeNotification object:self];return YES;}
 #endif
- NSError *error=nil;NSData *data=[self exportProfileData:&error];if(!data||![data writeToURL:self.profileURL options:NSDataWritingAtomic|NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:&error]){self.persistenceError=@"無法儲存這次修改，請先匯出資料保留副本。";return NO;}[NSNotificationCenter.defaultCenter postNotificationName:SXStoreDidChangeNotification object:self];return YES;
+ NSError *error=nil;NSData *data=[self exportProfileData:&error];if(!data||![data writeToURL:self.profileURL options:NSDataWritingAtomic|NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:&error]){self.lastWriteError=error;self.persistenceError=error.localizedDescription?:@"無法儲存這次修改，請先匯出資料保留副本。";return NO;}self.lastWriteError=nil;[NSNotificationCenter.defaultCenter postNotificationName:SXStoreDidChangeNotification object:self];return YES;
 }
 - (BOOL)setProfileValue:(id)value forKey:(NSString *)key {if(!value||![NSJSONSerialization isValidJSONObject:@{key:value}])return NO;NSMutableDictionary *candidate=[self.values mutableCopy];candidate[key]=value;if(!ValidValues(candidate))return NO;id previous=self.values[key];self.values[key]=value;if([self persist])return YES;if(previous)self.values[key]=previous;else [self.values removeObjectForKey:key];return NO;}
 - (BOOL)setSetting:(id)value forKey:(NSString *)key {NSMutableDictionary *settings=[[self valueForProfileKey:@"settings" fallback:@{}] mutableCopy];settings[key]=value;return [self setProfileValue:settings forKey:@"settings"];}
 - (BOOL)saveAccount:(NSDictionary *)account {if(![account[@"cash"] isKindOfClass:NSArray.class]||![account[@"positions"] isKindOfClass:NSArray.class])return NO;return [self setProfileValue:account forKey:@"account.v1"];}
-- (void)upsertRun:(NSDictionary *)run {if(![run[@"id"] isKindOfClass:NSString.class]||![run[@"code"] isKindOfClass:NSString.class])return;NSMutableArray *runs=[self.runs mutableCopy];NSUInteger index=[runs indexOfObjectPassingTest:^BOOL(NSDictionary *row,NSUInteger i,BOOL *stop){return [row[@"id"] isEqual:run[@"id"]];}];if(index!=NSNotFound){NSMutableDictionary *merged=[runs[index] mutableCopy];[merged addEntriesFromDictionary:run];runs[index]=merged;}else [runs insertObject:run atIndex:0];[self setProfileValue:runs forKey:@"runs"];}
+- (void)upsertRun:(NSDictionary *)run {if(![run[@"id"] isKindOfClass:NSString.class]||![run[@"code"] isKindOfClass:NSString.class])return;NSMutableArray *runs=[self.runs mutableCopy];NSUInteger index=[runs indexOfObjectPassingTest:^BOOL(NSDictionary *row,NSUInteger i,BOOL *stop){return [row[@"id"] isEqual:run[@"id"]];}];if(index!=NSNotFound){NSDictionary *previous=runs[index];if([previous[@"status"] isEqual:@"completed"]&&[previous[@"result"] isKindOfClass:NSDictionary.class])return;NSMutableDictionary *merged=[previous mutableCopy];[merged addEntriesFromDictionary:run];runs[index]=merged;}else [runs insertObject:run atIndex:0];[self setProfileValue:runs forKey:@"runs"];}
 - (BOOL)isPinned:(NSString *)runID {id pins=[self setting:@"researchPins" fallback:@[]];return [pins isKindOfClass:NSArray.class]&&[pins containsObject:runID];}
 - (void)togglePin:(NSString *)runID {id saved=[self setting:@"researchPins" fallback:@[]];NSMutableArray *pins=[saved isKindOfClass:NSArray.class]?[saved mutableCopy]:[NSMutableArray new];if([pins containsObject:runID])[pins removeObject:runID];else [pins addObject:runID];[self setSetting:pins forKey:@"researchPins"];}
 - (void)setWatchCodes:(NSArray *)codes {[self setProfileValue:[[NSOrderedSet orderedSetWithArray:codes] array] forKey:@"watch"];}
@@ -77,7 +79,7 @@ static BOOL ValidValues(id values){
  if(!pending.count){if(completion)completion();return;}__block NSUInteger remaining=pending.count;
  for(NSString *code in pending){NSString *path=[@"/api/quote?symbol=" stringByAppendingString:[[self sourceSymbolForCode:code] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet]];[[SXAPI sharedAPI] requestPath:path method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){NSString *currency=[[self stockForCode:code][@"market"] isEqual:@"TW"]?@"TWD":@"USD";if(!error&&[json isKindOfClass:NSDictionary.class]&&Finite(json[@"price"])&&[json[@"price"] doubleValue]>0&&[json[@"currency"] isEqual:currency]){self.quoteValues[code]=json;[self.quoteFailures removeObject:code];}else [self.quoteFailures addObject:code];[self.loadingCodes removeObject:code];[NSNotificationCenter.defaultCenter postNotificationName:SXQuotesDidChangeNotification object:self];if(--remaining==0&&completion)completion();}];}
 }
-- (NSData *)exportProfileData:(NSError **)error {return [NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"values":self.values} options:NSJSONWritingPrettyPrinted|NSJSONWritingSortedKeys error:error];}
+- (NSData *)exportProfileData:(NSError **)error {return [NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"values":self.values} options:NSJSONWritingSortedKeys error:error];}
 - (BOOL)importProfile:(NSDictionary *)profile replace:(BOOL)replace error:(NSError **)error {
  BOOL valid=[profile isKindOfClass:NSDictionary.class]&&[profile[@"version"] isEqual:@1]&&ValidValues(profile[@"values"]);NSDictionary *values=valid?profile[@"values"]:@{};
  NSRegularExpression *note=[NSRegularExpression regularExpressionWithPattern:@"^note\\.[A-Z0-9.\\-]{1,16}$" options:0 error:nil];
@@ -86,7 +88,12 @@ static BOOL ValidValues(id values){
  if(!valid){if(error)*error=[NSError errorWithDomain:@"SXStore" code:1 userInfo:@{NSLocalizedDescriptionKey:@"備份格式不正確，原有資料仍保留。"}];return NO;}
  if(!replace&&[self hasPersonalData]){if(error)*error=[NSError errorWithDomain:@"SXStore" code:2 userInfo:@{NSLocalizedDescriptionKey:@"已有原生紀錄，請先匯出，再明確選擇要還原的版本。"}];return NO;}
  if([NSFileManager.defaultManager fileExistsAtPath:self.profileURL.path]){NSURL *copy=[self.profileURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:[NSString stringWithFormat:@"before-import-%@.json",NSUUID.UUID.UUIDString]];if(![NSFileManager.defaultManager copyItemAtURL:self.profileURL toURL:copy error:error])return NO;}
- NSMutableDictionary *before=self.values;self.values=[values mutableCopy];if([self persist])return YES;self.values=before;if(error)*error=[NSError errorWithDomain:@"SXStore" code:3 userInfo:@{NSLocalizedDescriptionKey:self.persistenceError?:@"無法儲存還原資料。"}];return NO;
+ NSMutableDictionary *before=self.values;NSString *previousError=self.persistenceError;NSError *previousWriteError=self.lastWriteError;
+ self.values=[values mutableCopy];self.persistenceError=nil;self.lastWriteError=nil;
+ if([self persist])return YES;
+ NSString *writeMessage=self.persistenceError?:@"無法儲存還原資料。";NSError *writeError=self.lastWriteError;
+ self.values=before;self.persistenceError=previousError?:writeMessage;self.lastWriteError=previousWriteError?:writeError;
+ if(error){NSMutableDictionary *details=[@{NSLocalizedDescriptionKey:writeMessage} mutableCopy];if(writeError)details[NSUnderlyingErrorKey]=writeError;*error=[NSError errorWithDomain:@"SXStore" code:3 userInfo:details];}return NO;
 }
 - (BOOL)hasPersonalData {return self.runs.count||self.watchCodes.count||[self.account[@"positions"] count]||[self.account[@"cash"] count]||[[self.values.allKeys filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'note.'"]] count];}
 @end

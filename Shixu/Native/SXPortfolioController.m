@@ -388,15 +388,15 @@ static NSNumber *SXPortfolioInput(NSString *text) {
 - (void)showRecord:(NSDictionary *)record cash:(BOOL)cash {
     SXPortfolioRecordController *form = [SXPortfolioRecordController new]; form.cashRecord = cash; form.currency = record ? SXPortfolioText(record[@"currency"]) : self.currency; form.record = record;
     __weak typeof(self) weakSelf = self;
-    form.saveRecord = ^(NSDictionary *saved) { [weakSelf saveRecord:saved cash:cash editing:record != nil]; };
+    form.saveRecord = ^(NSDictionary *saved) { [weakSelf saveRecord:saved cash:cash original:record]; };
     [self.navigationController pushViewController:form animated:YES];
 }
-- (void)saveRecord:(NSDictionary *)record cash:(BOOL)cash editing:(BOOL)editing {
+- (void)saveRecord:(NSDictionary *)record cash:(BOOL)cash original:(NSDictionary *)original {
     NSString *key = cash ? @"cash" : @"positions"; NSMutableDictionary *account = [self.store.account mutableCopy];
     NSMutableArray *rows = [([account[key] isKindOfClass:NSArray.class] ? account[key] : @[]) mutableCopy];
-    if (editing) {
+    if (original) {
         NSUInteger index = [rows indexOfObjectPassingTest:^BOOL(NSDictionary *row, NSUInteger index, BOOL *stop) { return [row isKindOfClass:NSDictionary.class] && [row[@"id"] isEqual:record[@"id"]]; }];
-        if (index == NSNotFound) { SXShowError(self.navigationController.topViewController, @"紀錄已變更", @"找不到原紀錄，請返回持股頁重新開啟。"); return; }
+        if (index == NSNotFound || ![rows[index] isEqualToDictionary:original]) { SXShowError(self.navigationController.topViewController, @"紀錄已更新", @"紀錄已更新，請返回重新開啟。"); return; }
         rows[index] = record;
     } else if (!cash) {
         NSUInteger index = [rows indexOfObjectPassingTest:^BOOL(NSDictionary *row, NSUInteger index, BOOL *stop) { return [row isKindOfClass:NSDictionary.class] && [row[@"code"] isEqual:record[@"code"]] && [row[@"currency"] isEqual:record[@"currency"]]; }];

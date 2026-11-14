@@ -35,10 +35,44 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 @property(nonatomic) BOOL visible;
 @property(nonatomic) BOOL fetching;
 @property(nonatomic) BOOL evaluating;
+@property(nonatomic,strong) NSDictionary *monitor;
+@property(nonatomic) BOOL monitoring;
 @end
 
 @implementation SXReportController
++ (BOOL)finishNexaRequestForCode:(NSString *)code requestID:(NSString *)requestID {
+    SXStore *store = SXStore.sharedStore; NSMutableDictionary *requests = [SXRD([store valueForProfileKey:@"nexa.requests" fallback:@{}]) mutableCopy];
+    if (![SXRT(requests[code]) isEqualToString:requestID]) return YES;
+    [requests removeObjectForKey:code]; return [store setProfileValue:requests forKey:@"nexa.requests"];
+}
++ (BOOL)archiveNexaRun:(NSDictionary *)run forCode:(NSString *)code requestID:(NSString *)requestID {
+    if (![run[@"status"] isEqual:@"completed"] || ![run[@"model"] isEqual:@"gemini-4-argon"] || !SXRD(run[@"result"]).count || !SXRT(run[@"id"]).length || !code.length) return NO;
+    for(NSDictionary *stored in SXStore.sharedStore.runs)if([stored[@"id"] isEqual:run[@"id"]]&&[stored[@"status"] isEqual:@"completed"]&&stored[@"result"]&&![stored[@"result"] isEqual:run[@"result"]])return NO;
+    SXStore *store = SXStore.sharedStore; NSMutableDictionary *plans = [SXRD([store valueForProfileKey:@"nexa.plans" fallback:@{}]) mutableCopy];
+    NSMutableDictionary *entry = [SXRD(plans[code]) mutableCopy]; NSDictionary *current = SXRD(entry[@"current"]);
+    if ([SXRT(current[@"id"]) isEqualToString:SXRT(run[@"id"])]) {
+        if (current[@"result"] && ![current[@"result"] isEqual:run[@"result"]]) return NO;
+        // The original snapshot remains exact when the service reuses a plan.
+    } else {
+        NSMutableArray *history = [SXRA(entry[@"history"]) mutableCopy];
+        if (current.count && ![history containsObject:current]) [history insertObject:current atIndex:0];
+        entry[@"current"] = run; entry[@"history"] = history; plans[code] = entry;
+        if (![store setProfileValue:plans forKey:@"nexa.plans"]) return NO;
+    }
+    // A reused server plan can have its original ID, different from the new
+    // provisional request ID. Remove only that empty provisional row.
+    if (![SXRT(run[@"id"]) isEqualToString:requestID]) {
+        NSMutableArray *rows = [NSMutableArray new];
+        for (NSDictionary *saved in store.runs) {
+            BOOL provisional = [SXRT(saved[@"id"]) isEqualToString:requestID] && [saved[@"status"] isEqual:@"running"] && !SXRD(saved[@"result"]).count;
+            if (!provisional) [rows addObject:saved];
+        }
+        if (![store setProfileValue:rows forKey:@"runs"]) return NO;
+    }
+    return [self finishNexaRequestForCode:code requestID:requestID];
+}
 - (instancetype)initWithRun:(NSDictionary *)run { self = [super initWithStyle:UITableViewStyleInsetGrouped]; if (self) { _run = [run copy]; _sections = @[]; _statusMessage = @""; } return self; }
+- (void)displayArchivedRun:(NSDictionary *)run { if (![run isKindOfClass:NSDictionary.class]) return; self.run = run; self.statusMessage = @""; self.monitor = nil; [self stopPolling]; if (self.isViewLoaded) [self rebuild]; if (self.visible) [self fetchMonitor]; }
 - (void)viewDidLoad {
     [super viewDidLoad]; self.tableView.rowHeight = UITableViewAutomaticDimension; self.tableView.estimatedRowHeight = 86;
     self.tabs = [[UISegmentedControl alloc] initWithItems:@[@"總覽", @"價位", @"事件", @"估值", @"風險"]]; self.tabs.selectedSegmentIndex = 0; self.tabs.accessibilityLabel = @"研究報告內容";
@@ -52,9 +86,9 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
     [self rebuild];
 }
 - (void)dealloc { [self.pollTimer invalidate]; [NSNotificationCenter.defaultCenter removeObserver:self]; }
-- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; self.visible = YES; self.pollAttempts = 0; [self resumePolling]; }
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; self.visible = YES; self.pollAttempts = 0; [self resumePolling]; [self fetchMonitor]; }
 - (void)viewWillDisappear:(BOOL)animated { [super viewWillDisappear:animated]; self.visible = NO; [self stopPolling]; }
-- (void)applicationActive:(NSNotification *)notification { (void)notification; if (self.visible) [self resumePolling]; }
+- (void)applicationActive:(NSNotification *)notification { (void)notification; if (self.visible) { [self resumePolling]; [self fetchMonitor]; } }
 - (void)applicationInactive:(NSNotification *)notification { (void)notification; [self stopPolling]; }
 - (void)storeChanged:(NSNotification *)notification {
     (void)notification; NSString *runID = SXRT(self.run[@"id"]);
@@ -89,6 +123,23 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
         if (![@[@"running", @"completed", @"failed"] containsObject:state]) { self.statusMessage = @"後台未回傳可辨識的研究狀態，原始紀錄仍保留。"; [self rebuild]; return; }
         NSMutableDictionary *merged = [self.run mutableCopy]; [merged addEntriesFromDictionary:value]; merged[@"id"] = runID;
         self.statusMessage = @""; [SXStore.sharedStore upsertRun:merged];
+        if ([merged[@"kind"] isEqual:@"plan"]) {
+            if ([state isEqual:@"completed"] && ![SXReportController archiveNexaRun:merged forCode:SXRT(merged[@"code"]) requestID:runID]) { self.statusMessage = @"原始結果已保留，但 NEXA 歷史封存尚未保存完成；請先匯出備份。"; [self rebuild]; }
+            else if ([state isEqual:@"failed"]) [SXReportController finishNexaRequestForCode:SXRT(merged[@"code"]) requestID:runID];
+            if ([state isEqual:@"completed"]) [self fetchMonitor];
+        }
+    }];
+}
+- (void)fetchMonitor {
+    if (!self.visible || self.monitoring || ![self.run[@"kind"] isEqual:@"plan"] || ![self.run[@"status"] isEqual:@"completed"]) return;
+    NSString *symbol = [SXStore.sharedStore sourceSymbolForCode:SXRT(self.run[@"code"])]; if (!symbol.length) return;
+    self.monitoring = YES; NSString *runID = SXRT(self.run[@"id"]); __weak typeof(self) weakSelf = self;
+    [SXAPI.sharedAPI requestPath:[@"/api/research/monitor?symbol=" stringByAppendingString:[symbol stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet]] method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
+        typeof(self) self = weakSelf; if (!self) return; self.monitoring = NO; if (![SXRT(self.run[@"id"]) isEqualToString:runID]) return;
+        NSDictionary *value = SXRD(json);
+        if (!error && status == 200 && [value[@"runId"] isEqual:runID] && SXFiniteNumber(value[@"price"]) && [@[@"within", @"risk", @"target"] containsObject:SXRT(value[@"state"])]) self.monitor = value;
+        else self.monitor = @{@"unavailable": @YES, @"notice": !error && status == 200 && ![value[@"runId"] isEqual:runID] ? @"後台最新計畫已換版，這份歷史封存不套用新版條件。" : @"即時條件暫時無法核對；原始計畫與研究價位仍保留。"};
+        [self rebuild];
     }];
 }
 - (void)tabChanged { self.selectedTab = self.tabs.selectedSegmentIndex; [self rebuild]; if ([self.tableView numberOfSections]) [self.tableView setContentOffset:CGPointMake(0, -self.tableView.adjustedContentInset.top) animated:NO]; }
@@ -145,6 +196,10 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 - (void)addOverview:(NSMutableArray *)sections analysis:(NSDictionary *)a report:(NSDictionary *)r currency:(NSString *)currency {
     NSMutableArray *rows = [NSMutableArray new]; NSDictionary *last = SXRD(SXRA(a[@"daily"]).lastObject), *calculations = SXRD(r[@"calculations"]), *basis = SXRD(r[@"basis"]);
     if ([self.run[@"kind"] isEqual:@"plan"]) SXRRow(rows, @"NEXA 原文封存", @"以下保留當時模型文字，不代表已採用出場、減碼或停損提案。條件失效先重新研究，沒有自動下單或變更持股。", nil);
+    if ([self.run[@"kind"] isEqual:@"plan"] && self.monitor.count) {
+        if ([self.monitor[@"unavailable"] isEqual:@YES]) SXRRow(rows, @"目前條件核對", self.monitor[@"notice"], nil);
+        else { SXRRow(rows, @"目前條件核對", SXRJoin(@[SXRT(self.monitor[@"label"]), SXRT(self.monitor[@"researchLabel"]), SXQuoteLabel(SXRD(self.monitor[@"quote"]), NO), SXDateLabel(self.monitor[@"checkedAt"])], @"\n"), nil); SXRRow(rows, @"量測報價", SXMoney(self.monitor[@"price"], currency), nil); NSDictionary *decision=SXRD(self.monitor[@"decision"]);SXRRow(rows,@"持股規則",SXRJoin(@[SXRT(decision[@"label"]),SXRT(decision[@"explanation"])],@"\n"),nil);NSDictionary *previous=SXRD(self.monitor[@"previousCondition"]);if([previous[@"breached"] isEqual:@YES])SXRRow(rows,@"前版研究條件已觸發",[NSString stringWithFormat:@"前版價位 %@；正式收盤 %@。原紀錄保留，這不是賣出授權。",SXMoney(previous[@"stop"],currency),SXMoney(previous[@"formalClose"],currency)],nil);SXRRow(rows, @"條件與操作", @"行情觸發只提醒重評，不會自動重跑 AI、減碼、停損或下單。", nil); }
+    }
     SXRRow(rows, @"核心判斷", a[@"summary"], nil); SXRRow(rows, @"推演依據", a[@"rationale"], nil);
     if (SXRT(r[@"direction"]).length) SXRRow(rows, @"方向判斷", r[@"direction"], nil);
     SXRRow(rows, @"模型參考價", [NSString stringWithFormat:@"%@ · %@", SXMoney(a[@"latestClose"], currency), SXRT(a[@"marketDate"])], nil);

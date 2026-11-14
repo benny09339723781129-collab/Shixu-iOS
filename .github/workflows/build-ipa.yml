@@ -29,6 +29,7 @@ jobs:
       - name: Verify native simulator launch and screens
         run: bash scripts/verify-simulator.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
           name: Shixu-iOS-unsigned
           path: |
