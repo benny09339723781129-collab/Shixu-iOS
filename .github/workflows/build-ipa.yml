@@ -11,18 +11,30 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Compile the existing native shell without Apple signing credentials
+      - name: Select the newest installed Xcode
+        run: |
+          developer_app="$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort -V | tail -1)"
+          sudo xcode-select -s "$developer_app/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Generate isolated simulator fixtures
+        run: node scripts/generate-fixtures.mjs
+      - name: Compile native iOS app without Apple signing credentials
         run: bash scripts/build-ipa.sh
+      - name: Verify native simulator launch and screens
+        run: bash scripts/verify-simulator.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: Shixu-iOS-unsigned
           path: |
             build/Shixu-unsigned.ipa
             build/SHA256SUMS.txt
+            build/native-self-test.json
+            build/screenshots/*.png
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7

@@ -4,6 +4,7 @@
 #import <SafariServices/SafariServices.h>
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
+#import "Native/SXRootController.h"
 
 static NSString *const Origin = @"https://trend-forecast.pc-remote-worker.workers.dev";
 static BOOL FirstParty(NSURL *url) {
@@ -240,7 +241,7 @@ static BOOL IsToken(NSString *text) {
 - (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)options {
     if (![scene isKindOfClass:UIWindowScene.class]) return;
     self.window = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
-    self.window.rootViewController = [ShixuController new]; [self.window makeKeyAndVisible];
+    self.window.rootViewController = [SXRootController new]; [self.window makeKeyAndVisible];
 }
 @end
 @interface ShixuAppDelegate : UIResponder <UIApplicationDelegate>
