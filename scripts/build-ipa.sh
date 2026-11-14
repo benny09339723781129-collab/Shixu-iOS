@@ -5,7 +5,7 @@ mode="${1:-device}"
 sdk_name=iphoneos
 target=arm64-apple-ios16.0
 arch=arm64
-extra=()
+extra=(-DDEBUG=0)
 output="$PWD/build"
 if [[ "$mode" == simulator ]]; then
  sdk_name=iphonesimulator
