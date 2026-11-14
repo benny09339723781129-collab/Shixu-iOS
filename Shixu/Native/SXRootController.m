@@ -23,14 +23,23 @@
   if(!error&&status==200&&[json isKindOfClass:NSDictionary.class]){id user=[json[@"user"] isKindOfClass:NSDictionary.class]?json[@"user"]:@{};NSString *userID=[user[@"id"] isKindOfClass:NSString.class]?user[@"id"]:nil;if([json[@"signedIn"] isEqual:@YES]&&!userID.length)workspaceError=[NSError errorWithDomain:@"SXWorkspace" code:1 userInfo:@{NSLocalizedDescriptionKey:@"帳號身分未確認，保留上次工作區。"}];else [[SXStore sharedStore] activateProfileForUserID:[json[@"signedIn"] isEqual:@YES]?userID:nil error:&workspaceError];}
   [spinner removeFromSuperview];[self buildTabs];
   if(workspaceError)SXShowError(self,@"工作區未切換",workspaceError.localizedDescription);
-  NSString *identity=[SXStore sharedStore].activeProfileUserID?:@"__local__";NSString *sourceOwner=[NSUserDefaults.standardUserDefaults stringForKey:@"native-legacy-source-owner"];
-  if(!error&&!workspaceError&&!sourceOwner){sourceOwner=identity;[NSUserDefaults.standardUserDefaults setObject:sourceOwner forKey:@"native-legacy-source-owner"];}
-  if(!error&&!workspaceError&&[identity isEqual:sourceOwner]&&![[SXStore sharedStore] hasPersonalData]&&![NSUserDefaults.standardUserDefaults boolForKey:@"native-migration-v1"])[[SXSession sharedSession] readLegacyProfileWithCompletion:^(NSDictionary *profile,NSError *migrationError){if(migrationError||![([SXStore sharedStore].activeProfileUserID?:@"__local__") isEqual:identity])return;NSError *importError=nil;if(profile&&[[SXStore sharedStore] importProfile:profile replace:NO error:&importError])[NSUserDefaults.standardUserDefaults setBool:YES forKey:@"native-migration-v1"];if(importError)SXShowError(self,@"舊版資料仍保留",importError.localizedDescription);}];
+  if(!workspaceError)[self offerLegacyMigration];
  }];
  }];
 }
 - (void)dealloc {[NSNotificationCenter.defaultCenter removeObserver:self];}
 - (void)workspaceChanged:(NSNotification *)notification {if(![notification.userInfo[@"workspaceChanged"] boolValue]||!self.viewControllers.count)return;NSUInteger selected=self.selectedIndex;[self buildTabs];self.selectedIndex=MIN(selected,self.viewControllers.count-1);}
+
+- (void)offerLegacyMigration {
+ if([[SXStore sharedStore] hasPersonalData]||[NSUserDefaults.standardUserDefaults boolForKey:@"native-migration-v1"]||[NSUserDefaults.standardUserDefaults boolForKey:@"native-migration-offered-v1"])return;
+ dispatch_async(dispatch_get_main_queue(), ^{
+  if(self.presentedViewController)return;
+  UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"歡迎使用拾序 2.0" message:@"首頁、研究與持股已換成原生介面。舊版紀錄仍保留，可到設定預覽，再確認複製到目前工作區。" preferredStyle:UIAlertControllerStyleAlert];
+  [alert addAction:[UIAlertAction actionWithTitle:@"開始使用" style:UIAlertActionStyleCancel handler:nil]];
+  [alert addAction:[UIAlertAction actionWithTitle:@"前往移轉" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){self.selectedIndex=4;}]];
+  [self presentViewController:alert animated:YES completion:^{[NSUserDefaults.standardUserDefaults setBool:YES forKey:@"native-migration-offered-v1"];}];
+ });
+}
 
 - (void)buildTabs {
  NSArray *controllers=@[[SXHomeController new],[SXMarketController new],[SXResearchController new],[SXPortfolioController new],[SXSettingsController new]];NSArray *titles=@[@"首頁",@"行情",@"研究",@"持股",@"設定"],*icons=@[@"house",@"chart.xyaxis.line",@"sparkles",@"chart.pie",@"gearshape"];

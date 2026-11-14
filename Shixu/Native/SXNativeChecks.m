@@ -3,6 +3,7 @@
 #import "SXUI.h"
 #import "SXPortfolioController.h"
 #import "SXReportController.h"
+#import "SXHomeController.h"
 
 #if DEBUG
 @interface SXStore (SXCheckPersistence)
@@ -73,6 +74,28 @@ void SXRunNativeChecks(void) {
     check([archiveBefore isEqual:archiveAfter], @"Pinning changed archived research bytes");
     check([store isPinned:@"qa-amd"] != pinnedBefore, @"Pinning did not change only the preference");
     [store togglePin:@"qa-amd"];
+
+    // Exercise the same native delegate and segmented-control event paths used
+    // by Home -> Portfolio, while retaining the isolated profile for restoration.
+    NSData *currencyBefore=[store exportProfileData:nil];
+    NSMutableDictionary *legacyValues=[store.profile mutableCopy];[legacyValues removeObjectForKey:@"account.currency"];
+    NSMutableDictionary *legacySettings=[NSMutableDictionary new];
+    id existingSettings=legacyValues[@"settings"];if([existingSettings isKindOfClass:NSDictionary.class])legacySettings=[existingSettings mutableCopy];
+    legacySettings[@"account.currency"]=@"TWD";legacyValues[@"settings"]=legacySettings;
+    BOOL currencySetup=[store importProfile:@{@"version":@1,@"values":legacyValues} replace:YES error:nil];
+    SXHomeController *currencyHome=[SXHomeController new];SXPortfolioController *currencyPortfolio=[SXPortfolioController new];
+    UITabBarController *currencyTabs=[UITabBarController new];
+    currencyTabs.viewControllers=@[[[UINavigationController alloc] initWithRootViewController:currencyHome],[UINavigationController new],[UINavigationController new],[[UINavigationController alloc] initWithRootViewController:currencyPortfolio]];
+    [currencyHome loadViewIfNeeded];[currencyPortfolio loadViewIfNeeded];
+    UISegmentedControl *currencySegment=[currencyPortfolio valueForKey:@"currencyControl"];
+    check(currencySetup&&[[currencyPortfolio valueForKey:@"currency"] isEqual:@"TWD"]&&currencySegment.selectedSegmentIndex==1,@"Portfolio did not read the legacy nested currency when the root preference was absent");
+    [store setSetting:@"USD" forKey:@"account.currency"];
+    [currencyHome tableView:currencyHome.tableView didSelectRowAtIndexPath:[NSIndexPath indexPathForRow:1 inSection:0]];
+    BOOL homeToTWD=currencyTabs.selectedIndex==3&&[[currencyPortfolio valueForKey:@"currency"] isEqual:@"TWD"]&&currencySegment.selectedSegmentIndex==1;
+    currencySegment.selectedSegmentIndex=0;[currencySegment sendActionsForControlEvents:UIControlEventValueChanged];
+    check(homeToTWD&&[[store valueForProfileKey:@"account.currency" fallback:@""] isEqual:@"USD"]&&[[currencyPortfolio valueForKey:@"currency"] isEqual:@"USD"]&&currencySegment.selectedSegmentIndex==0,@"Native Home TWD -> Portfolio -> USD flow used inconsistent currency preferences");
+    NSDictionary *currencyProfile=[NSJSONSerialization JSONObjectWithData:currencyBefore options:0 error:nil];
+    check([store importProfile:currencyProfile replace:YES error:nil],@"Currency UI checks did not restore the original fixture profile");
 
     // Persistence injections use a separate fixture store and a random temp
     // directory. The shared profile URL and user record files are never changed.
@@ -151,10 +174,12 @@ void SXRunNativeChecks(void) {
     NSDictionary *savedPlans=[store valueForProfileKey:@"nexa.plans" fallback:@{}];check([savedPlans[@"AMD"][@"history"] containsObject:plan],@"Native NEXA dropped its prior original snapshot");
     NSData *planBefore=[store exportProfileData:nil];NSMutableDictionary *changedPlan=[second mutableCopy];changedPlan[@"result"]=@{@"summary":@"Changed original"};check(![SXReportController archiveNexaRun:changedPlan forCode:@"AMD" requestID:@"qa-plan-2"]&&[[store exportProfileData:nil] isEqual:planBefore],@"Native NEXA accepted a changed historical result");
     NSDictionary *initialProfile=[NSJSONSerialization JSONObjectWithData:before options:0 error:nil];check([store importProfile:initialProfile replace:YES error:nil],@"Fixture checks did not restore the original isolated records");
-    [store refreshQuotesForCodes:@[@"AMD", @"NVDA", @"2330"] completion:^{
+    // Let quote callbacks queued by the native currency controls finish before
+    // checking the shared quote pipeline.
+    dispatch_async(dispatch_get_main_queue(), ^{[store refreshQuotesForCodes:@[@"AMD", @"NVDA", @"2330"] completion:^{
         check([store.quotes[@"AMD"][@"price"] doubleValue] == 120, @"Native quote pipeline failed");
         check([store.quotes[@"2330"][@"currency"] isEqual:@"TWD"], @"Native quote currency isolation failed");
         SXWriteCheckResult(failures, count);
-    }];
+    }];});
 #endif
 }

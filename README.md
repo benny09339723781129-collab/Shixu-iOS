@@ -7,7 +7,7 @@
 - AI 研究及 NEXA 只在使用者明確按開始後提出一次請求，先保存 UUID；中斷後 GET 查詢原請求，不自動付費重跑、不下單。
 - 原始研究封存保持不變。NEXA 的條件觸發只要求重新研究，原模型的減碼／出場文字不是使用者的操作授權。
 - 原生 JSON 儲存採原子寫入與裝置資料保護；手動匯出、匯入及 Google 雲端備份／還原，版本衝突不直接覆寫。
-- 首次升級以隱藏 WebKit 僅讀取舊版可信 `/privacy.html` origin 的白名單 localStorage，複製至原生儲存；保留舊版資料。已有原生紀錄時不自動覆蓋。WebKit 不用於主要 APP 頁面。
+- 舊版資料沒有可驗證的帳號歸屬，因此首次升級僅提示移轉入口。使用者到設定預覽紀錄數量與目標工作區，確認後才複製。隱藏 WebKit 僅讀取舊版可信 `/privacy.html` origin 的白名單 localStorage；不自動匯入或刪除舊版資料。WebKit 不用於主要 APP 頁面。
 - 舊研究 owner Cookie 與帳號 Cookie 使用既有資料容器移轉；Google 登入沿用 ASWebAuthenticationSession + PKCE。沒有讀取或保存 Apple 密碼、憑證或配對檔。
 - Bundle ID 固定 `app.shixu.studio`。原始顯示名為 ASCII `Shixu`，繁體中文標籤為「拾序」；沿用同一簽署身分升級，避免刪除 APP 造成資料遺失。
 

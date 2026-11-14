@@ -200,8 +200,7 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     [super viewDidLoad]; self.store = [SXStore sharedStore]; self.title = @"持股";
     self.tableView.rowHeight = UITableViewAutomaticDimension; self.tableView.estimatedRowHeight = 74;
     self.tableView.backgroundColor = UIColor.systemGroupedBackgroundColor;
-    NSString *currency = [self.store setting:@"account.currency" fallback:@"USD"];
-    self.currency = [currency isEqual:@"TWD"] ? @"TWD" : @"USD";
+    [self synchronizeCurrency];
     self.sortOrder = [self.store setting:@"account.sort" fallback:@"original"];
     if (![@[@"original", @"value", @"pnl", @"code"] containsObject:self.sortOrder]) self.sortOrder = @"original";
     self.currencyControl = [[UISegmentedControl alloc] initWithItems:@[@"美股 · USD", @"台股 · TWD"]];
@@ -222,13 +221,20 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(quotesChanged:) name:SXQuotesDidChangeNotification object:nil];
     [self rebuild];
 }
-- (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self rebuild]; [self refreshQuotes]; }
+- (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; [self synchronizeCurrency]; [self rebuild]; [self refreshQuotes]; }
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
-- (void)storeChanged:(NSNotification *)notification { [self rebuild]; }
+- (void)storeChanged:(NSNotification *)notification { BOOL changed=[self synchronizeCurrency]; [self rebuild]; if(changed)[self refreshQuotes]; }
 - (void)quotesChanged:(NSNotification *)notification { [self rebuild]; }
 - (void)currencyChanged {
-    self.currency = self.currencyControl.selectedSegmentIndex == 1 ? @"TWD" : @"USD";
-    [self.store setSetting:self.currency forKey:@"account.currency"]; [self rebuild]; [self refreshQuotes];
+    NSString *currency=self.currencyControl.selectedSegmentIndex == 1 ? @"TWD" : @"USD";
+    if(![self.store setProfileValue:currency forKey:@"account.currency"]){[self synchronizeCurrency];SXShowError(self,@"幣別未儲存",self.store.persistenceError?:@"請重試，原有設定保留。");return;}
+    [self synchronizeCurrency]; [self rebuild]; [self refreshQuotes];
+}
+- (BOOL)synchronizeCurrency {
+    id value=[self.store valueForProfileKey:@"account.currency" fallback:NSNull.null];
+    if(value==NSNull.null)value=[self.store setting:@"account.currency" fallback:@"USD"];
+    NSString *currency=[value isEqual:@"TWD"]?@"TWD":@"USD";BOOL changed=![self.currency isEqual:currency];
+    self.currency=currency;self.currencyControl.selectedSegmentIndex=[currency isEqual:@"TWD"]?1:0;return changed;
 }
 - (NSDictionary *)validQuoteForCode:(NSString *)code {
     NSDictionary *quote = self.store.quotes[code];
@@ -411,7 +417,7 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     account[key] = rows;
     if (![self.store saveAccount:account]) { SXShowError(self.navigationController.topViewController, @"無法儲存", self.store.persistenceError ?: @"本機儲存失敗，請保留輸入並重試。"); return; }
     self.currency = record[@"currency"]; self.currencyControl.selectedSegmentIndex = [self.currency isEqual:@"TWD"] ? 1 : 0;
-    [self.store setSetting:self.currency forKey:@"account.currency"];
+    if(![self.store setProfileValue:self.currency forKey:@"account.currency"])[self synchronizeCurrency];
     [self.navigationController popToViewController:self animated:YES]; [self rebuild]; [self refreshQuotes];
 }
 - (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {

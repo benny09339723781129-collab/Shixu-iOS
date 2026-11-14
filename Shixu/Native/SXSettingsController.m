@@ -139,7 +139,7 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     if (indexPath.section == 2) {
         if (row == 0) return [self buttonCell:@"匯出本機備份" symbol:@"square.and.arrow.up" enabled:YES action:^{ [weakSelf exportLocal]; }];
         if (row == 1) return [self buttonCell:@"從檔案匯入備份" symbol:@"square.and.arrow.down" enabled:YES action:^{ [weakSelf importLocal]; }];
-        return [self buttonCell:@"重新讀取舊版 App 資料" symbol:@"arrow.triangle.2.circlepath" enabled:YES action:^{ [weakSelf migrateLegacy]; }];
+        return [self buttonCell:@"預覽並移轉舊版資料" symbol:@"arrow.triangle.2.circlepath" enabled:YES action:^{ [weakSelf migrateLegacy]; }];
     }
     if (row == 0) {
         NSDictionary *info = NSBundle.mainBundle.infoDictionary; NSString *version = SXSettingsText(info[@"CFBundleShortVersionString"]), *build = SXSettingsText(info[@"CFBundleVersion"]);
@@ -272,7 +272,8 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     NSUInteger runs = [values[@"runs"] isKindOfClass:NSArray.class] ? [values[@"runs"] count] : 0;
     NSUInteger positions = [account[@"positions"] isKindOfClass:NSArray.class] ? [account[@"positions"] count] : 0;
     NSString *restoreWorkspace=self.store.activeProfileUserID;NSUInteger generation=self.requestGeneration;
-    NSString *message = [NSString stringWithFormat:@"%@包含自選 %lu 檔、研究 %lu 份、持股 %lu 筆。將以這份備份替換目前原生 App 的資料。%@替換前會先保存本機副本；舊版資料保留。", source, (unsigned long)watch, (unsigned long)runs, (unsigned long)positions, [self.store hasPersonalData] ? @"目前已有個人紀錄，兩份資料不會合併。" : @""];
+    NSString *target=self.store.activeProfileUserID?@"目前 Google 帳號的工作區":@"未登入的本機工作區";
+    NSString *message = [NSString stringWithFormat:@"%@\n包含自選 %lu 檔、研究 %lu 份、持股 %lu 筆。\n目標：%@。\n%@替換前會先保存本機副本；舊版資料保留。", source, (unsigned long)watch, (unsigned long)runs, (unsigned long)positions, target, [self.store hasPersonalData] ? @"目前已有個人紀錄，兩份資料不會合併。" : @""];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"確認還原備份？" message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) weakSelf = self;
@@ -294,7 +295,7 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
             SXShowError(controller, @"讀取未完成", controller.statusMessage); return; }
         void (^done)(void) = ^{ [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"native-migration-v1"]; [controller finishWithMessage:@"已將舊版資料複製至原生 App；舊版資料保留。"];
             SXShowError(controller, @"資料已讀取", @"原生 App 已使用這份舊版備份。舊版資料與本機還原前副本仍保留。"); };
-        [controller confirmRestore:profile source:@"舊版 App 資料（將複製到目前工作區）" completion:done];
+        [controller confirmRestore:profile source:@"舊版 App 資料。舊版紀錄沒有可驗證的帳號歸屬，請先確認這些是你的資料，再決定是否複製。" completion:done];
     }];
 }
 @end
