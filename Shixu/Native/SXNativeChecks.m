@@ -14,6 +14,7 @@
 @interface SXRestoreCheckStore : SXStore
 @property(nonatomic) BOOL failWrite;
 @property(nonatomic) BOOL sawClearedError;
+@property(nonatomic) BOOL writeFixtureFiles;
 @end
 @implementation SXRestoreCheckStore
 - (BOOL)persist {
@@ -24,6 +25,7 @@
         [self setValue:error.localizedDescription forKey:@"persistenceError"];
         return NO;
     }
+    if(self.writeFixtureFiles){if([self valueForKey:@"persistenceError"])return NO;NSError *error=nil;NSData *data=[self exportProfileData:&error];BOOL ok=data&&[data writeToURL:[self valueForKey:@"profileURL"] options:NSDataWritingAtomic error:&error];if(!ok){[self setValue:error forKey:@"lastWriteError"];[self setValue:error.localizedDescription?:@"QA write failed" forKey:@"persistenceError"];}return ok;}
     return [super persist];
 }
 @end
@@ -115,9 +117,34 @@ void SXRunNativeChecks(void) {
         NSMutableDictionary *edited = [original mutableCopy]; edited[@"quantity"] = @3;
         [controller saveRecord:edited cash:NO original:original];
         check(editSetup && [[recovery exportProfileData:nil] isEqual:editBefore], @"A stale position form overwrote a newer restored record");
+        recovery.failWrite=YES;[recovery setValue:nil forKey:@"persistenceError"];
+        NSData *runBefore=[recovery exportProfileData:nil];NSDictionary *pending=@{@"id":NSUUID.UUID.UUIDString,@"code":@"AMD",@"status":@"pending"};
+        check(![recovery upsertRun:pending]&&[[recovery exportProfileData:nil] isEqual:runBefore],@"Failed request-ID persistence reported success or changed records");
+
+        SXRestoreCheckStore *workspaces=[SXRestoreCheckStore new];workspaces.writeFixtureFiles=YES;
+        [workspaces setValue:directory forKey:@"profileDirectoryURL"];[workspaces setValue:[directory URLByAppendingPathComponent:@"profile-v1.json"] forKey:@"profileURL"];[workspaces setValue:nil forKey:@"activeProfileUserID"];[workspaces setValue:nil forKey:@"persistenceError"];
+        [workspaces setValue:[@{@"watch":@[@"AMD"]} mutableCopy] forKey:@"values"];
+        NSError *switchError=nil;
+        check([workspaces activateProfileForUserID:@"qa-account-A" error:&switchError]&&workspaces.profile.count==0,@"First account inherited anonymous records");
+        check([workspaces setProfileValue:@[@"NVDA"] forKey:@"watch"],@"Could not save isolated account A");
+        check([workspaces activateProfileForUserID:@"qa-account-B" error:&switchError]&&workspaces.profile.count==0,@"Account B inherited account A records");
+        check([workspaces setProfileValue:@[@"2330"] forKey:@"watch"],@"Could not save isolated account B");
+        NSURL *bURL=[workspaces valueForKey:@"profileURL"];
+        check(![bURL.lastPathComponent containsString:@"qa-account-B"]&&[bURL.lastPathComponent hasPrefix:@"account-"],@"Account filename exposed an unhashed identity");
+        check([workspaces activateProfileForUserID:@"qa-account-A" error:&switchError]&&[workspaces.watchCodes isEqual:@[@"NVDA"]],@"Returning to A did not restore only A records");
+        check([workspaces activateProfileForUserID:nil error:&switchError]&&[workspaces.watchCodes isEqual:@[@"AMD"]],@"Sign-out did not restore anonymous records");
+        check([workspaces activateProfileForUserID:@"qa-account-B" error:&switchError]&&[workspaces.watchCodes isEqual:@[@"2330"]],@"Returning to B did not preserve its records");
+        check([workspaces activateProfileForUserID:@"qa-account-C" error:&switchError]&&[workspaces copyLocalProfileToActiveAccount:&switchError]&&[workspaces.watchCodes isEqual:@[@"AMD"]],@"Explicit anonymous-to-empty-account copy failed");
+        check(![workspaces copyLocalProfileToActiveAccount:&switchError],@"Explicit copy overwrote a nonempty account workspace");
+        check([workspaces activateProfileForUserID:@"qa-account-A" error:&switchError],@"Could not reopen A for switch-failure check");
+        NSData *aBefore=[workspaces exportProfileData:nil];NSData *corrupt=[@"not a JSON profile" dataUsingEncoding:NSUTF8StringEncoding];[corrupt writeToURL:bURL atomically:YES];
+        check(![workspaces activateProfileForUserID:@"qa-account-B" error:&switchError]&&[workspaces.activeProfileUserID isEqual:@"qa-account-A"]&&[[workspaces exportProfileData:nil] isEqual:aBefore]&&[[NSData dataWithContentsOfURL:bURL] isEqual:corrupt],@"Failed target load changed identity or overwrote a workspace");
+        workspaces.failWrite=YES;switchError=nil;
+        check(![workspaces activateProfileForUserID:nil error:&switchError]&&[workspaces.activeProfileUserID isEqual:@"qa-account-A"]&&[[workspaces exportProfileData:nil] isEqual:aBefore],@"Failed current-profile save switched identity or changed records");
     }
     [NSFileManager.defaultManager removeItemAtURL:directory error:nil];
-    NSDictionary *originalRun=store.runs.firstObject;NSMutableDictionary *altered=[originalRun mutableCopy];altered[@"result"]=@{@"summary":@"Untrusted replacement"};[store upsertRun:altered];check([store.runs.firstObject isEqual:originalRun],@"A late response changed completed research");
+    NSDictionary *originalRun=store.runs.firstObject;NSMutableDictionary *altered=[originalRun mutableCopy];altered[@"result"]=@{@"summary":@"Untrusted replacement"};check(![store upsertRun:altered]&&[store.runs.firstObject isEqual:originalRun],@"A late response changed completed research or reported success");
+    check([store upsertRun:originalRun],@"Identical completed archive was not acknowledged");NSMutableDictionary *downgrade=[originalRun mutableCopy];downgrade[@"status"]=@"pending";check(![store upsertRun:downgrade],@"Completed research accepted a downgraded status");
     NSMutableDictionary *plan=[originalRun mutableCopy];plan[@"id"]=@"qa-plan-1";plan[@"code"]=@"AMD";plan[@"kind"]=@"plan";
     check([SXReportController archiveNexaRun:plan forCode:@"AMD" requestID:@"qa-plan-1"],@"Native NEXA did not archive a completed plan");
     NSMutableDictionary *second=[plan mutableCopy];second[@"id"]=@"qa-plan-2";check([SXReportController archiveNexaRun:second forCode:@"AMD" requestID:@"qa-plan-2"],@"Native NEXA did not preserve successive plan versions");

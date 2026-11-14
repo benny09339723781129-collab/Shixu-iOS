@@ -6,6 +6,7 @@
 #import <math.h>
 
 static NSString *SXResearchText(id value) { return [value isKindOfClass:NSString.class] ? value : @""; }
+static BOOL SXResearchWorkspaceMatches(NSString *identity){return [(SXStore.sharedStore.activeProfileUserID?:@"") isEqualToString:identity?:@""];}
 static NSInteger SXResearchDays(NSDictionary *run) { return [run[@"horizon"] respondsToSelector:@selector(integerValue)] ? [run[@"horizon"] integerValue] : 7; }
 static NSString *SXResearchHorizon(NSInteger days) { return days == 126 ? @"半年" : [NSString stringWithFormat:@"%ld 日", (long)days]; }
 static double SXResearchTime(id value) {
@@ -254,9 +255,9 @@ static double SXResearchTime(id value) {
     if (self.submitting) return;
     NSString *code = self.selectedCode; if (![SXStore.sharedStore stockForCode:code]) { SXShowError(self, @"請選取股票", @"輸入有效代號，或點選搜尋結果。 "); return; }
     [self.view endEditing:YES]; [self setBusy:YES]; NSInteger days = [self days];
-    __weak typeof(self) weakSelf = self;
+    __weak typeof(self) weakSelf = self;NSString *workspace=[SXStore.sharedStore.activeProfileUserID copy];
     [SXAPI.sharedAPI requestPath:@"/api/research/status" method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
-        typeof(self) self = weakSelf; if (!self) return;
+        typeof(self) self = weakSelf; if (!self||!SXResearchWorkspaceMatches(workspace)) return;
         NSDictionary *health = [json isKindOfClass:NSDictionary.class] ? json : @{};
         if (error || status != 200 || ![health[@"ready"] isEqual:@YES]) { [self setBusy:NO]; SXShowError(self, @"分析暫時無法啟動", error.localizedDescription ?: (SXResearchText(health[@"error"]).length ? health[@"error"] : @"分析後台尚未就緒，沒有呼叫付費模型。")); return; }
         NSDictionary *position=self.planMode?[self heldPosition]:nil;id savedRequests=[SXStore.sharedStore valueForProfileKey:@"nexa.requests" fallback:@{}];if(self.planMode&&(!position||([savedRequests isKindOfClass:NSDictionary.class]&&SXResearchText(savedRequests[code]).length))){[self setBusy:NO];SXShowError(self,@"暫時無法建立",@"目前持股已變更，或已有同股計畫正在進行。請返回持股計畫查看。");return;}
@@ -264,26 +265,26 @@ static double SXResearchTime(id value) {
         NSString *kind=self.planMode?@"plan":@"forecast";
         if(self.planMode){NSMutableDictionary *requests=[savedRequests mutableCopy];requests[code]=runID;if(![SXStore.sharedStore setProfileValue:requests forKey:@"nexa.requests"]){[self setBusy:NO];SXShowError(self,@"無法保存計畫識別碼",@"這次沒有呼叫付費模型，請先匯出資料。");return;}}
         NSDictionary *pending = @{@"id": runID, @"code": code, @"horizon": @(days), @"mode": @"event", @"kind":kind, @"status": @"running", @"createdAt": @((long long)(NSDate.date.timeIntervalSince1970 * 1000)), @"progress": @{@"phase": @"collecting"}};
-        [SXStore.sharedStore upsertRun:pending];
-        BOOL saved=NO;for(NSDictionary *row in SXStore.sharedStore.runs)if([row[@"id"] isEqual:runID])saved=YES;
+        BOOL saved=[SXStore.sharedStore upsertRun:pending];
         if (!saved||SXStore.sharedStore.persistenceError.length) {if(self.planMode)[SXReportController finishNexaRequestForCode:code requestID:runID];[self setBusy:NO]; SXShowError(self, @"無法保存分析識別碼", @"先處理本機儲存問題後再開始，這次沒有呼叫付費模型。"); return; }
         SXReportController *report = [[SXReportController alloc] initWithRun:pending]; [self.navigationController pushViewController:report animated:YES];
         NSDictionary *body = @{@"id": runID, @"code": code, @"symbol": [SXStore.sharedStore sourceSymbolForCode:code], @"days": @(days), @"kind":kind, @"position":position?:NSNull.null};
         [SXAPI.sharedAPI requestPath:@"/api/research" method:@"POST" body:body completion:^(id response, NSInteger responseStatus, NSError *submitError) {
+            if(!SXResearchWorkspaceMatches(workspace))return;
             NSDictionary *value = [response isKindOfClass:NSDictionary.class] ? response : @{};
-            BOOL completed=!submitError&&responseStatus>=200&&responseStatus<300&&[value[@"status"] isEqual:@"completed"]&&[value[@"model"] isEqual:@"gemini-4-argon"]&&[value[@"result"] isKindOfClass:NSDictionary.class];
+            BOOL completed=!submitError&&responseStatus>=200&&responseStatus<300&&[SXReportController validateCompletedRun:value forRequest:pending allowReusedPlan:[kind isEqual:@"plan"]];
             if([kind isEqual:@"plan"]&&completed){BOOL archived=[SXReportController archiveNexaRun:value forCode:code requestID:runID];if(archived){[SXStore.sharedStore upsertRun:value];[report displayArchivedRun:value];}else SXShowError(report,@"封存尚未保存完成",@"請先匯出原始研究保留副本，再重新查詢同一請求。");[weakSelf setBusy:NO];return;}
             NSDictionary *current = pending;
             for (NSDictionary *saved in SXStore.sharedStore.runs) if ([saved[@"id"] isEqual:runID]) { current = saved; break; }
             BOOL terminal = [current[@"status"] isEqual:@"completed"] || [current[@"status"] isEqual:@"failed"];
             NSMutableDictionary *update = [current mutableCopy];
-            if (!submitError && responseStatus >= 200 && responseStatus < 300 && [SXResearchText(value[@"status"]) isEqualToString:@"completed"] && [value[@"model"] isEqual:@"gemini-4-argon"] && [value[@"result"] isKindOfClass:NSDictionary.class]) [update addEntriesFromDictionary:value];
+            if (completed) [update addEntriesFromDictionary:value];
             else if (!terminal && !submitError && responseStatus >= 200 && responseStatus < 300 && [SXResearchText(value[@"status"]) isEqualToString:@"running"]) [update addEntriesFromDictionary:value];
             else if (!terminal && responseStatus >= 400 && responseStatus != 502 && responseStatus != 504 && SXResearchText(value[@"error"]).length) { update[@"status"] = @"failed"; update[@"error"] = value[@"error"]; }
             else if (!terminal) update[@"connectionNotice"] = @"要求回覆尚未確認；只查詢同一分析識別碼，不自動重跑付費模型。";
             // Preserve the local identity even when a server progress envelope omits metadata.
             update[@"id"] = runID; update[@"code"] = code; update[@"horizon"] = @(days); update[@"mode"] = @"event";
-            [SXStore.sharedStore upsertRun:update]; [weakSelf setBusy:NO];
+            if(![SXStore.sharedStore upsertRun:update])SXShowError(report,@"研究尚未保存",@"請先匯出資料保留副本；不會自動重跑付費模型。");[weakSelf setBusy:NO];
             if([kind isEqual:@"plan"]&&[update[@"status"] isEqual:@"failed"])[SXReportController finishNexaRequestForCode:code requestID:runID];
         }];
     }];

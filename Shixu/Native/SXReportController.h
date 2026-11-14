@@ -5,5 +5,6 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)displayArchivedRun:(NSDictionary *)run;
 + (BOOL)archiveNexaRun:(NSDictionary *)run forCode:(NSString *)code requestID:(NSString *)requestID;
 + (BOOL)finishNexaRequestForCode:(NSString *)code requestID:(NSString *)requestID;
++ (BOOL)validateCompletedRun:(NSDictionary *)run forRequest:(NSDictionary *)request allowReusedPlan:(BOOL)allowReuse;
 @end
 NS_ASSUME_NONNULL_END

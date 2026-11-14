@@ -16,6 +16,8 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
 @property(nonatomic) BOOL busy;
 @property(nonatomic) BOOL statusLoaded;
 @property(nonatomic) BOOL conflict;
+@property(nonatomic) BOOL accountVerified;
+@property(nonatomic) NSUInteger requestGeneration;
 @end
 
 @implementation SXSettingsController
@@ -32,6 +34,18 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
 - (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
 - (void)storeChanged:(NSNotification *)notification { [self applyTheme]; [self.tableView reloadData]; }
 - (BOOL)signedIn { return [self.accountStatus[@"signedIn"] isEqual:@YES]; }
+- (BOOL)isCurrentController {return self.tabBarController&&[self.tabBarController.viewControllers containsObject:self.navigationController];}
+- (BOOL)requestCurrent:(NSUInteger)generation userID:(NSString *)userID {return generation==self.requestGeneration&&[self isCurrentController]&&((!userID&&!self.store.activeProfileUserID)||[userID isEqual:self.store.activeProfileUserID]);}
+- (NSString *)statusUserID {return SXSettingsText(SXSettingsDictionary(self.accountStatus[@"user"])[@"id"]);}
+- (void)withVerifiedAccount:(void (^)(NSString *,NSUInteger))action {
+ if(self.busy||!self.signedIn||!self.accountVerified)return;NSString *expected=self.statusUserID;
+ if(!expected.length||![expected isEqual:self.store.activeProfileUserID]){self.accountVerified=NO;SXShowError(self,@"帳號未確認",@"目前工作區與登入帳號不同，請重新檢查帳號。");return;}
+ self.busy=YES;NSUInteger generation=++self.requestGeneration;__weak typeof(self) weakSelf=self;
+ [[SXAPI sharedAPI] requestPath:@"/api/account/status" method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){SXSettingsController *controller=weakSelf;if(!controller||![controller requestCurrent:generation userID:expected])return;
+ if(![controller checkResponse:json status:status error:error])return;NSString *actual=SXSettingsText(SXSettingsDictionary(json[@"user"])[@"id"]);
+ if(![json[@"signedIn"] isEqual:@YES]||![actual isEqual:expected]){controller.accountVerified=NO;[controller finishWithMessage:@"登入帳號已變更，未傳送或還原任何資料。請重新檢查帳號。"];SXShowError(controller,@"帳號已變更",controller.statusMessage);return;}action(expected,generation);
+ }];
+}
 - (void)applyTheme {
     id theme = [self.store setting:@"theme" fallback:@"system"];
     UIUserInterfaceStyle style = [theme isEqual:@"light"] ? UIUserInterfaceStyleLight : [@[@"dark", @"black", @"navy"] containsObject:theme] ? UIUserInterfaceStyleDark : UIUserInterfaceStyleUnspecified;
@@ -53,30 +67,35 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     NSString *message = status == 409 ? @"另一個裝置已有較新的雲端備份。這次沒有覆寫，也不會自動重試；請先還原雲端。" : SXSettingsText(SXSettingsDictionary(json)[@"error"]);
     if (!message.length) message = error.localizedDescription ?: @"目前無法連線，請稍後重試。";
     if (status == 409) self.conflict = YES;
+    if(error||status==401)self.accountVerified=NO;
     [self finishWithMessage:message]; SXShowError(self, status == 409 ? @"備份版本衝突" : @"操作未完成", message); return NO;
 }
 - (void)refreshStatus {
     if (self.busy) { [self.refreshControl endRefreshing]; return; }
-    self.busy = YES;
+    self.busy = YES;self.accountVerified=NO;NSUInteger generation=++self.requestGeneration;
     __weak typeof(self) weakSelf = self;
     [[SXAPI sharedAPI] requestPath:@"/api/account/status" method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
-        SXSettingsController *controller = weakSelf; if (!controller) return;
+        SXSettingsController *controller = weakSelf; if (!controller||generation!=controller.requestGeneration||![controller isCurrentController]) return;
         if (![controller checkResponse:json status:status error:error]) return;
-        controller.accountStatus = json; controller.statusLoaded = YES;
+        NSString *userID=SXSettingsText(SXSettingsDictionary(json[@"user"])[@"id"]);NSError *workspaceError=nil;
+        if(([json[@"signedIn"] isEqual:@YES]&&!userID.length)||![controller.store activateProfileForUserID:[json[@"signedIn"] isEqual:@YES]?userID:nil error:&workspaceError]){[controller finishWithMessage:workspaceError.localizedDescription?:@"帳號身分無法驗證，工作區未變更。"];SXShowError(controller,@"工作區未切換",controller.statusMessage);return;}
+        if(![controller isCurrentController])return;
+        controller.accountStatus = json; controller.statusLoaded = YES;controller.accountVerified=[json[@"signedIn"] isEqual:@YES]&&[userID isEqual:controller.store.activeProfileUserID];
         [controller finishWithMessage:controller.conflict ? @"版本衝突尚未處理，請先還原雲端備份。" : @""];
     }];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 1; if (section == 1) return self.signedIn ? 5 : 3; if (section == 2) return 3; return 2;
+    if (section == 0) return 1; if (section == 1) return self.signedIn ? 6 : 3; if (section == 2) return 3; return 2;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return @[@"外觀", @"Google 帳號與雲端備份", @"本機資料", @"關於拾序"][(NSUInteger)section];
+    return @[@"外觀", @"Google 帳號與雲端備份", self.store.activeProfileUserID?@"目前帳號工作區":@"未登入的本機工作區", @"關於拾序"][(NSUInteger)section];
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section == 0) return @"使用 iOS 系統外觀；系統選擇會隨手機的淺色、深色模式切換。";
     if (section == 1) {
-        NSString *note = @"雲端備份只會在你按下「備份本機」後執行；這個版本不會自動備份。還原會先在本機保存還原前副本。";
+        NSString *note = @"每個 Google 帳號與未登入資料分開儲存。只會備份目前帳號工作區；這個版本不會自動備份。還原會先保存本機副本。";
+        if(self.store.persistenceError)note=[@"本機工作區目前無法正常讀取或保存，雲端備份已停用；可以從雲端或檔案還原。\n" stringByAppendingString:note];
         return self.statusMessage.length ? [NSString stringWithFormat:@"%@\n%@", self.statusMessage, note] : note;
     }
     if (section == 2) return @"匯入或還原會替換原生資料，不會合併兩份持股。替換前會先保存本機副本；舊版 App 的資料不會被刪除。";
@@ -112,8 +131,9 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
         }
         if (row == 1) return [self buttonCell:@"重新檢查帳號" symbol:@"arrow.clockwise" enabled:YES action:^{ [weakSelf refreshStatus]; }];
         if (!self.signedIn) return [self buttonCell:@"使用 Google 登入" symbol:@"person.crop.circle.badge.plus" enabled:self.statusLoaded && [self.accountStatus[@"configured"] isEqual:@YES] action:^{ [weakSelf signIn]; }];
-        if (row == 2) return [self buttonCell:@"備份本機" symbol:@"icloud.and.arrow.up" enabled:!self.conflict action:^{ [weakSelf confirmBackup]; }];
-        if (row == 3) return [self buttonCell:@"還原雲端" symbol:@"icloud.and.arrow.down" enabled:self.conflict || SXSettingsDictionary(self.accountStatus[@"backup"]).count > 0 action:^{ [weakSelf fetchCloudRestore]; }];
+        if (row == 2) return [self buttonCell:@"備份本機" symbol:@"icloud.and.arrow.up" enabled:self.accountVerified&&!self.conflict&&!self.store.persistenceError action:^{ [weakSelf confirmBackup]; }];
+        if (row == 3) return [self buttonCell:@"還原雲端" symbol:@"icloud.and.arrow.down" enabled:self.accountVerified&&(self.conflict || SXSettingsDictionary(self.accountStatus[@"backup"]).count > 0) action:^{ [weakSelf fetchCloudRestore]; }];
+        if(row==4)return [self buttonCell:@"將本機資料複製到此帳號" symbol:@"doc.on.doc" enabled:self.accountVerified&&self.store.profile.count==0&&!self.store.persistenceError action:^{[weakSelf confirmCopyLocal];}];
         return [self buttonCell:@"登出 Google" symbol:@"rectangle.portrait.and.arrow.right" enabled:YES action:^{ [weakSelf confirmSignOut]; }];
     }
     if (indexPath.section == 2) {
@@ -145,10 +165,10 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     [self presentViewController:sheet animated:YES completion:nil];
 }
 - (void)signIn {
-    if (self.busy) return; self.busy = YES;
+    if (self.busy) return; self.busy = YES;self.accountVerified=NO;NSUInteger generation=++self.requestGeneration;
     __weak typeof(self) weakSelf = self;
     [[SXSession sharedSession] signInFromController:self completion:^(BOOL success, NSError *error) {
-        SXSettingsController *controller = weakSelf; if (!controller) return;
+        SXSettingsController *controller = weakSelf; if (!controller||generation!=controller.requestGeneration||![controller isCurrentController]) return;
         controller.busy = NO;
         if (success) { controller.conflict = NO; [controller refreshStatus]; }
         else if (error) { [controller finishWithMessage:error.localizedDescription]; SXShowError(controller, @"Google 登入未完成", error.localizedDescription); }
@@ -167,32 +187,42 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)backupLocal {
-    if (self.busy || !self.signedIn || self.conflict) return;
-    NSDictionary *backup = SXSettingsDictionary(self.accountStatus[@"backup"]); id revision = backup[@"revision"];
-    if (!SXFiniteNumber(revision) || [revision doubleValue] < 0 || [revision doubleValue] != floor([revision doubleValue])) revision = @0;
-    NSDictionary *body = @{@"baseRevision":revision, @"profile":@{@"version":@1, @"values":self.store.profile}};
-    self.busy = YES; __weak typeof(self) weakSelf = self;
-    [[SXAPI sharedAPI] requestPath:@"/api/account/backup" method:@"POST" body:body completion:^(id json, NSInteger status, NSError *error) {
-        SXSettingsController *controller = weakSelf; if (!controller || ![controller checkResponse:json status:status error:error]) return;
-        NSMutableDictionary *state = [controller.accountStatus mutableCopy]; state[@"backup"] = json; controller.accountStatus = state;
-        [controller finishWithMessage:@"已手動備份目前原生 App 的資料。"];
-        SXShowError(controller, @"備份完成", @"資料已存入目前 Google 帳號；自動備份保持關閉。");
+    if(self.busy||!self.signedIn||self.conflict||!self.accountVerified||self.store.persistenceError)return;
+    NSDictionary *backup=SXSettingsDictionary(self.accountStatus[@"backup"]);id revision=backup[@"revision"];
+    if(!SXFiniteNumber(revision)||[revision doubleValue]<0||[revision doubleValue]!=floor([revision doubleValue]))revision=@0;
+    __weak typeof(self) weakSelf=self;
+    [self withVerifiedAccount:^(NSString *userID,NSUInteger generation){
+        SXSettingsController *controller=weakSelf;if(!controller||![controller requestCurrent:generation userID:userID])return;
+        NSDictionary *body=@{@"baseRevision":revision,@"profile":@{@"version":@1,@"values":controller.store.profile}};
+        [[SXAPI sharedAPI] requestPath:@"/api/account/backup" method:@"POST" body:body completion:^(id json,NSInteger status,NSError *error){
+            SXSettingsController *current=weakSelf;if(!current||![current requestCurrent:generation userID:userID]||![current checkResponse:json status:status error:error])return;
+            NSMutableDictionary *state=[current.accountStatus mutableCopy];state[@"backup"]=json;current.accountStatus=state;
+            [current finishWithMessage:@"已手動備份目前帳號工作區。"];
+            SXShowError(current,@"備份完成",@"只備份目前 Google 帳號的工作區，自動備份保持關閉。");
+        }];
     }];
 }
 - (void)fetchCloudRestore {
-    if (self.busy || !self.signedIn) return; self.busy = YES;
-    __weak typeof(self) weakSelf = self;
-    [[SXAPI sharedAPI] requestPath:@"/api/account/backup" method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
-        SXSettingsController *controller = weakSelf; if (!controller || ![controller checkResponse:json status:status error:error]) return;
-        NSDictionary *profile = [json[@"profile"] isKindOfClass:NSDictionary.class] ? json[@"profile"] : nil;
-        if (!profile) { [controller finishWithMessage:@"雲端備份格式不正確，本機資料仍保留。"];
-            SXShowError(controller, @"無法還原", controller.statusMessage); return; }
-        [controller finishWithMessage:@""];
-        [controller confirmRestore:profile source:@"雲端備份" completion:^{
-            NSMutableDictionary *state = [controller.accountStatus mutableCopy]; state[@"backup"] = @{@"revision":json[@"revision"] ?: @0, @"updatedAt":json[@"updatedAt"] ?: NSNull.null};
-            controller.accountStatus = state; controller.conflict = NO; [controller finishWithMessage:@"已還原雲端備份；還原前副本保存在這個裝置。"];
+    __weak typeof(self) weakSelf=self;
+    [self withVerifiedAccount:^(NSString *userID,NSUInteger generation){
+        [[SXAPI sharedAPI] requestPath:@"/api/account/backup" method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){
+            SXSettingsController *controller=weakSelf;if(!controller||![controller requestCurrent:generation userID:userID]||![controller checkResponse:json status:status error:error])return;
+            NSDictionary *profile=[json[@"profile"] isKindOfClass:NSDictionary.class]?json[@"profile"]:nil;
+            if(!profile){[controller finishWithMessage:@"雲端備份格式不正確，目前工作區保留。"];SXShowError(controller,@"無法還原",controller.statusMessage);return;}
+            [controller finishWithMessage:@""];
+            [controller confirmRestore:profile source:@"目前 Google 帳號的雲端備份" completion:^{
+                if(![controller requestCurrent:generation userID:userID])return;
+                NSMutableDictionary *state=[controller.accountStatus mutableCopy];state[@"backup"]=@{@"revision":json[@"revision"]?:@0,@"updatedAt":json[@"updatedAt"]?:NSNull.null};controller.accountStatus=state;controller.conflict=NO;[controller finishWithMessage:@"已還原此帳號的備份；還原前副本保留。"];
+            }];
         }];
     }];
+}
+- (void)confirmCopyLocal {
+    if(self.busy||!self.accountVerified||self.store.profile.count)return;
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"將未登入的本機資料複製到此帳號？" message:@"只複製到目前空白的 Google 帳號工作區。未登入工作區的原檔保留，不會自動送至雲端。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];__weak typeof(self) weakSelf=self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"複製本機資料" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){[weakSelf withVerifiedAccount:^(NSString *userID,NSUInteger generation){SXSettingsController *controller=weakSelf;if(!controller||![controller requestCurrent:generation userID:userID])return;NSError *error=nil;if(![controller.store copyLocalProfileToActiveAccount:&error]){[controller finishWithMessage:error.localizedDescription];SXShowError(controller,@"未複製資料",error.localizedDescription?:@"目前帳號工作區已非空白。");return;}[controller finishWithMessage:@"已明確複製本機資料；原本本機工作區與雲端備份保留。"];}];}]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)confirmSignOut {
     if (self.busy || !self.signedIn) return;
@@ -200,9 +230,10 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"登出" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
-        SXSettingsController *controller = weakSelf; if (!controller || controller.busy) return; controller.busy = YES;
+        SXSettingsController *controller = weakSelf; if (!controller || controller.busy) return; controller.busy = YES;controller.accountVerified=NO;NSUInteger generation=++controller.requestGeneration;NSString *userID=controller.store.activeProfileUserID;
         [[SXAPI sharedAPI] requestPath:@"/api/account/sign-out" method:@"POST" body:@{} completion:^(id json, NSInteger status, NSError *error) {
-            SXSettingsController *current = weakSelf; if (!current || ![current checkResponse:json status:status error:error]) return;
+            SXSettingsController *current = weakSelf; if (!current || ![current requestCurrent:generation userID:userID] || ![current checkResponse:json status:status error:error]) return;
+            NSError *workspaceError=nil;if(![current.store activateProfileForUserID:nil error:&workspaceError]){[current finishWithMessage:workspaceError.localizedDescription];SXShowError(current,@"已登出，工作區未切換",workspaceError.localizedDescription?:@"本機資料無法保存，原檔保留。");return;}
             current.accountStatus = @{@"configured":@YES, @"signedIn":@NO}; current.conflict = NO;
             [current finishWithMessage:@"已登出，本機資料保留。"];
         }];
@@ -222,7 +253,7 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     [self presentViewController:picker animated:YES completion:nil];
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    if (self.busy || !urls.count) return; NSURL *url = urls.firstObject; BOOL access = [url startAccessingSecurityScopedResource];
+    if (self.busy || ![self isCurrentController] || !urls.count) return; NSURL *url = urls.firstObject; BOOL access = [url startAccessingSecurityScopedResource];
     NSError *error = nil; NSNumber *size = nil; [url getResourceValue:&size forKey:NSURLFileSizeKey error:&error];
     NSData *data = !error && (!size || size.unsignedLongLongValue <= 8 * 1024 * 1024) ? [NSData dataWithContentsOfURL:url options:NSDataReadingMappedIfSafe error:&error] : nil;
     if (access) [url stopAccessingSecurityScopedResource];
@@ -240,12 +271,14 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     NSUInteger watch = [values[@"watch"] isKindOfClass:NSArray.class] ? [values[@"watch"] count] : 0;
     NSUInteger runs = [values[@"runs"] isKindOfClass:NSArray.class] ? [values[@"runs"] count] : 0;
     NSUInteger positions = [account[@"positions"] isKindOfClass:NSArray.class] ? [account[@"positions"] count] : 0;
+    NSString *restoreWorkspace=self.store.activeProfileUserID;NSUInteger generation=self.requestGeneration;
     NSString *message = [NSString stringWithFormat:@"%@包含自選 %lu 檔、研究 %lu 份、持股 %lu 筆。將以這份備份替換目前原生 App 的資料。%@替換前會先保存本機副本；舊版資料保留。", source, (unsigned long)watch, (unsigned long)runs, (unsigned long)positions, [self.store hasPersonalData] ? @"目前已有個人紀錄，兩份資料不會合併。" : @""];
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"確認還原備份？" message:message preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"保存副本並還原" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         SXSettingsController *controller = weakSelf; if (!controller || controller.busy) return;
+        if(![controller requestCurrent:generation userID:restoreWorkspace]){SXShowError(controller,@"工作區已變更",@"資料未還原，請在目前帳號重新選取備份。");return;}
         NSError *error = nil;
         if (![controller.store importProfile:profile replace:YES error:&error]) { SXShowError(controller, @"還原未完成", error.localizedDescription ?: @"備份格式不正確，原有資料仍保留。"); return; }
         [controller applyTheme]; [controller finishWithMessage:@"已還原備份，還原前副本已保留。"];
@@ -254,20 +287,14 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)migrateLegacy {
-    if (self.busy) return; self.busy = YES; __weak typeof(self) weakSelf = self;
+    if (self.busy) return; self.busy = YES;NSUInteger generation=++self.requestGeneration;NSString *workspace=self.store.activeProfileUserID; __weak typeof(self) weakSelf = self;
     [[SXSession sharedSession] readLegacyProfileWithCompletion:^(NSDictionary *profile, NSError *error) {
-        SXSettingsController *controller = weakSelf; if (!controller) return; controller.busy = NO;
+        SXSettingsController *controller = weakSelf; if (!controller || ![controller requestCurrent:generation userID:workspace]) return; controller.busy = NO;
         if (error || !profile) { [controller finishWithMessage:error.localizedDescription ?: @"未取得舊版資料，原有資料仍保留。"];
             SXShowError(controller, @"讀取未完成", controller.statusMessage); return; }
         void (^done)(void) = ^{ [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"native-migration-v1"]; [controller finishWithMessage:@"已將舊版資料複製至原生 App；舊版資料保留。"];
             SXShowError(controller, @"資料已讀取", @"原生 App 已使用這份舊版備份。舊版資料與本機還原前副本仍保留。"); };
-        if ([controller.store hasPersonalData]) [controller confirmRestore:profile source:@"舊版 App 資料" completion:done];
-        else {
-            NSError *importError = nil;
-            if (![controller.store importProfile:profile replace:NO error:&importError]) { [controller finishWithMessage:importError.localizedDescription ?: @"無法匯入舊版資料。"];
-                SXShowError(controller, @"讀取未完成", controller.statusMessage); return; }
-            [controller applyTheme]; done();
-        }
+        [controller confirmRestore:profile source:@"舊版 App 資料（將複製到目前工作區）" completion:done];
     }];
 }
 @end

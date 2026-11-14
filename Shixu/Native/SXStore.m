@@ -1,11 +1,14 @@
 #import "SXStore.h"
 #import "SXAPI.h"
 #import <math.h>
+#import <CommonCrypto/CommonDigest.h>
 NSNotificationName const SXStoreDidChangeNotification=@"SXStoreDidChange";
 NSNotificationName const SXQuotesDidChangeNotification=@"SXQuotesDidChange";
 static BOOL Finite(id value){return [value isKindOfClass:NSNumber.class]&&CFGetTypeID((__bridge CFTypeRef)value)!=CFBooleanGetTypeID()&&isfinite([value doubleValue]);}
 static NSSet *ProfileKeys(void){return [NSSet setWithArray:@[@"settings",@"watch",@"holdings",@"alerts",@"savedArticles",@"runs",@"account.v1",@"account.currency",@"market.cards.US",@"market.cards.TW",@"chart.averages",@"nexa.plans",@"nexa.requests",@"intel.bookmarks",@"dark-preference.v3"]];}
 static BOOL Text(id value){return [value isKindOfClass:NSString.class]&&[value length]>0;}
+static NSString *ProfileFilename(NSString *userID){if(!userID)return @"profile-v1.json";NSData *data=[userID dataUsingEncoding:NSUTF8StringEncoding];unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(data.bytes,(CC_LONG)data.length,digest);NSMutableString *hash=[NSMutableString new];for(NSUInteger i=0;i<CC_SHA256_DIGEST_LENGTH;i++)[hash appendFormat:@"%02x",digest[i]];return [NSString stringWithFormat:@"account-%@.json",hash];}
+static NSError *WorkspaceError(NSString *message){return [NSError errorWithDomain:@"SXWorkspace" code:1 userInfo:@{NSLocalizedDescriptionKey:message}];}
 static BOOL ValidValues(id values){
  if(![values isKindOfClass:NSDictionary.class]||[values count]>2000)return NO;
  NSSet *lists=[NSSet setWithArray:@[@"watch",@"holdings",@"alerts",@"savedArticles",@"runs",@"chart.averages",@"intel.bookmarks",@"market.cards.US",@"market.cards.TW"]],*objects=[NSSet setWithArray:@[@"settings",@"account.v1",@"nexa.plans",@"nexa.requests"]];
@@ -28,6 +31,8 @@ static BOOL ValidValues(id values){
 @property(nonatomic,strong) NSMutableSet *loadingCodes;
 @property(nonatomic,strong) NSDictionary *stocks;
 @property(nonatomic,strong) NSURL *profileURL;
+@property(nonatomic,strong) NSURL *profileDirectoryURL;
+@property(nonatomic,readwrite,copy) NSString *activeProfileUserID;
 @property(nonatomic,readwrite) NSArray *directory;
 @property(nonatomic,readwrite) NSString *persistenceError;
 @property(nonatomic,strong) NSError *lastWriteError;
@@ -38,7 +43,12 @@ static BOOL ValidValues(id values){
  if((self=[super init])){
   self.values=[NSMutableDictionary new];self.quoteValues=[NSMutableDictionary new];self.quoteFailures=[NSMutableSet new];self.loadingCodes=[NSMutableSet new];
   NSURL *base=[[NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject URLByAppendingPathComponent:@"ShixuNative" isDirectory:YES];
-  [NSFileManager.defaultManager createDirectoryAtURL:base withIntermediateDirectories:YES attributes:@{NSFileProtectionKey:NSFileProtectionCompleteUntilFirstUserAuthentication} error:nil];self.profileURL=[base URLByAppendingPathComponent:@"profile-v1.json"];
+  [NSFileManager.defaultManager createDirectoryAtURL:base withIntermediateDirectories:YES attributes:@{NSFileProtectionKey:NSFileProtectionCompleteUntilFirstUserAuthentication} error:nil];self.profileDirectoryURL=base;
+  id active=[NSUserDefaults.standardUserDefaults objectForKey:@"native-active-profile-user-v1"];self.activeProfileUserID=Text(active)?active:nil;
+#if DEBUG
+  if([NSProcessInfo.processInfo.arguments containsObject:@"--ui-fixtures"])self.activeProfileUserID=nil;
+#endif
+  self.profileURL=[base URLByAppendingPathComponent:ProfileFilename(self.activeProfileUserID)];
   NSData *data=[NSData dataWithContentsOfURL:self.profileURL];NSDictionary *profile=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:nil]:nil;
   if([profile isKindOfClass:NSDictionary.class]&&[profile[@"version"] isEqual:@1]&&ValidValues(profile[@"values"]))self.values=[profile[@"values"] mutableCopy];
   else if(data.length)self.persistenceError=@"原生紀錄暫時無法讀取，請先匯出或還原備份；原檔仍保留。";
@@ -51,6 +61,25 @@ static BOOL ValidValues(id values){
  }return self;
 }
 - (NSDictionary *)profile{return [self.values copy];}
+- (BOOL)activateProfileForUserID:(NSString *)userID error:(NSError **)error {
+ if(userID&&(!Text(userID)||userID.length>1024)){if(error)*error=WorkspaceError(@"帳號身分無法驗證，未切換資料。");return NO;}
+ if((!userID&&!self.activeProfileUserID)||[userID isEqual:self.activeProfileUserID])return YES;
+ if(![self persist]){if(error)*error=self.lastWriteError?:WorkspaceError(self.persistenceError?:@"目前資料無法保存，未切換帳號。");return NO;}
+ NSURL *target=[self.profileDirectoryURL URLByAppendingPathComponent:ProfileFilename(userID)];NSMutableDictionary *next=[NSMutableDictionary new];
+ if([NSFileManager.defaultManager fileExistsAtPath:target.path]){NSError *readError=nil;NSData *data=[NSData dataWithContentsOfURL:target options:0 error:&readError];id profile=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:&readError]:nil;if(readError||![profile isKindOfClass:NSDictionary.class]||![profile[@"version"] isEqual:@1]||!ValidValues(profile[@"values"])){if(error)*error=readError?:WorkspaceError(@"此帳號的本機工作區無法讀取，原有工作區與檔案保留。");return NO;}next=[profile[@"values"] mutableCopy];}
+ else {NSError *writeError=nil;NSData *empty=[NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"values":@{}} options:NSJSONWritingSortedKeys error:&writeError];if(!empty||![empty writeToURL:target options:NSDataWritingAtomic|NSDataWritingFileProtectionCompleteUntilFirstUserAuthentication error:&writeError]){if(error)*error=writeError?:WorkspaceError(@"無法建立帳號工作區，原有資料保留。");return NO;}}
+ self.values=next;self.profileURL=target;self.activeProfileUserID=userID;self.persistenceError=nil;self.lastWriteError=nil;
+#if DEBUG
+ if(![NSProcessInfo.processInfo.arguments containsObject:@"--ui-fixtures"])
+#endif
+ {if(userID)[NSUserDefaults.standardUserDefaults setObject:userID forKey:@"native-active-profile-user-v1"];else [NSUserDefaults.standardUserDefaults removeObjectForKey:@"native-active-profile-user-v1"];}
+ [NSNotificationCenter.defaultCenter postNotificationName:SXStoreDidChangeNotification object:self userInfo:@{@"workspaceChanged":@YES}];return YES;
+}
+- (BOOL)copyLocalProfileToActiveAccount:(NSError **)error {
+ if(!self.activeProfileUserID||self.values.count||self.persistenceError){if(error)*error=WorkspaceError(@"只有可正常讀取的空白帳號工作區能複製本機資料；目前資料未變更。");return NO;}
+ NSURL *local=[self.profileDirectoryURL URLByAppendingPathComponent:@"profile-v1.json"];NSData *data=[NSData dataWithContentsOfURL:local options:0 error:error];id profile=data?[NSJSONSerialization JSONObjectWithData:data options:0 error:error]:nil;
+ if(![profile isKindOfClass:NSDictionary.class]){if(error&&!*error)*error=WorkspaceError(@"未找到有效的未登入本機備份，原檔保留。");return NO;}return [self importProfile:profile replace:NO error:error];
+}
 - (NSDictionary *)account {id account=self.values[@"account.v1"];return [account isKindOfClass:NSDictionary.class]?account:@{@"cash":@[],@"positions":@[]};}
 - (NSArray *)runs {id runs=self.values[@"runs"];if(![runs isKindOfClass:NSArray.class])return @[];return [runs filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id run,NSDictionary *bindings){return [run isKindOfClass:NSDictionary.class]&&[run[@"id"] isKindOfClass:NSString.class]&&[run[@"code"] isKindOfClass:NSString.class];}]];}
 - (NSArray *)watchCodes {id codes=self.values[@"watch"];if(![codes isKindOfClass:NSArray.class])return @[];return [codes filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id code,NSDictionary *bindings){return [code isKindOfClass:NSString.class];}]];}
@@ -68,7 +97,7 @@ static BOOL ValidValues(id values){
 - (BOOL)setProfileValue:(id)value forKey:(NSString *)key {if(!value||![NSJSONSerialization isValidJSONObject:@{key:value}])return NO;NSMutableDictionary *candidate=[self.values mutableCopy];candidate[key]=value;if(!ValidValues(candidate))return NO;id previous=self.values[key];self.values[key]=value;if([self persist])return YES;if(previous)self.values[key]=previous;else [self.values removeObjectForKey:key];return NO;}
 - (BOOL)setSetting:(id)value forKey:(NSString *)key {NSMutableDictionary *settings=[[self valueForProfileKey:@"settings" fallback:@{}] mutableCopy];settings[key]=value;return [self setProfileValue:settings forKey:@"settings"];}
 - (BOOL)saveAccount:(NSDictionary *)account {if(![account[@"cash"] isKindOfClass:NSArray.class]||![account[@"positions"] isKindOfClass:NSArray.class])return NO;return [self setProfileValue:account forKey:@"account.v1"];}
-- (void)upsertRun:(NSDictionary *)run {if(![run[@"id"] isKindOfClass:NSString.class]||![run[@"code"] isKindOfClass:NSString.class])return;NSMutableArray *runs=[self.runs mutableCopy];NSUInteger index=[runs indexOfObjectPassingTest:^BOOL(NSDictionary *row,NSUInteger i,BOOL *stop){return [row[@"id"] isEqual:run[@"id"]];}];if(index!=NSNotFound){NSDictionary *previous=runs[index];if([previous[@"status"] isEqual:@"completed"]&&[previous[@"result"] isKindOfClass:NSDictionary.class])return;NSMutableDictionary *merged=[previous mutableCopy];[merged addEntriesFromDictionary:run];runs[index]=merged;}else [runs insertObject:run atIndex:0];[self setProfileValue:runs forKey:@"runs"];}
+- (BOOL)upsertRun:(NSDictionary *)run {if(![run isKindOfClass:NSDictionary.class]||!Text(run[@"id"])||!Text(run[@"code"]))return NO;NSMutableArray *runs=[self.runs mutableCopy];NSUInteger index=[runs indexOfObjectPassingTest:^BOOL(NSDictionary *row,NSUInteger i,BOOL *stop){return [row[@"id"] isEqual:run[@"id"]];}];if(index!=NSNotFound){NSDictionary *previous=runs[index];if([previous[@"status"] isEqual:@"completed"]&&[previous[@"result"] isKindOfClass:NSDictionary.class])return [run[@"status"] isEqual:@"completed"]&&[run[@"code"] isEqual:previous[@"code"]]&&[run[@"result"] isEqual:previous[@"result"]];NSMutableDictionary *merged=[previous mutableCopy];[merged addEntriesFromDictionary:run];runs[index]=merged;}else [runs insertObject:run atIndex:0];return [self setProfileValue:runs forKey:@"runs"];}
 - (BOOL)isPinned:(NSString *)runID {id pins=[self setting:@"researchPins" fallback:@[]];return [pins isKindOfClass:NSArray.class]&&[pins containsObject:runID];}
 - (void)togglePin:(NSString *)runID {id saved=[self setting:@"researchPins" fallback:@[]];NSMutableArray *pins=[saved isKindOfClass:NSArray.class]?[saved mutableCopy]:[NSMutableArray new];if([pins containsObject:runID])[pins removeObject:runID];else [pins addObject:runID];[self setSetting:pins forKey:@"researchPins"];}
 - (void)setWatchCodes:(NSArray *)codes {[self setProfileValue:[[NSOrderedSet orderedSetWithArray:codes] array] forKey:@"watch"];}

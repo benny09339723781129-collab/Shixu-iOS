@@ -6,6 +6,7 @@
 #import <math.h>
 
 static NSDictionary *SXRD(id value) { return [value isKindOfClass:NSDictionary.class] ? value : @{}; }
+static BOOL SXRWorkspaceMatches(NSString *identity){return [(SXStore.sharedStore.activeProfileUserID?:@"") isEqualToString:identity?:@""];}
 static NSArray *SXRA(id value) { return [value isKindOfClass:NSArray.class] ? value : @[]; }
 static NSString *SXRT(id value) { if ([value isKindOfClass:NSString.class]) return value; if ([value isKindOfClass:NSNumber.class]) return [value stringValue]; return @""; }
 static NSString *SXRJoin(NSArray *values, NSString *separator) { NSMutableArray *strings = [NSMutableArray new]; for (id value in values) { NSString *text = SXRT(value); if (text.length) [strings addObject:text]; } return [strings componentsJoinedByString:separator]; }
@@ -40,6 +41,16 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 @end
 
 @implementation SXReportController
++ (BOOL)validateCompletedRun:(NSDictionary *)run forRequest:(NSDictionary *)request allowReusedPlan:(BOOL)allowReuse {
+ if(![run isKindOfClass:NSDictionary.class]||![run[@"status"] isEqual:@"completed"]||![run[@"model"] isEqual:@"gemini-4-argon"]||!SXRT(run[@"id"]).length||![run[@"code"] isEqual:request[@"code"]]||![run[@"horizon"] isEqual:request[@"horizon"]])return NO;
+ BOOL same=[run[@"id"] isEqual:request[@"id"]];if(!same&&!(allowReuse&&[request[@"kind"] isEqual:@"plan"]&&[run[@"kind"] isEqual:@"plan"]&&[run[@"unchanged"] isEqual:@YES]))return NO;
+ NSDictionary *result=SXRD(run[@"result"]),*stock=[SXStore.sharedStore stockForCode:SXRT(request[@"code"])];NSString *currency=[stock[@"market"] isEqual:@"TW"]?@"TWD":@"USD";
+ if(!result.count||![result[@"currency"] isEqual:currency]||![result[@"symbol"] isEqual:[SXStore.sharedStore sourceSymbolForCode:SXRT(request[@"code"])]])return NO;
+ NSArray *prices=SXRA(result[@"daily"]);NSInteger days=[request[@"horizon"] integerValue];NSUInteger count=days==126?24:days==30?10:7;if(prices.count!=count)return NO;
+ for(id item in prices){NSDictionary *point=SXRD(item);if(!SXFiniteNumber(point[@"price"])||[point[@"price"] doubleValue]<=0||!SXFiniteNumber(point[@"low"])||!SXFiniteNumber(point[@"high"])||[point[@"low"] doubleValue]<=0||[point[@"low"] doubleValue]>[point[@"price"] doubleValue]||[point[@"high"] doubleValue]<[point[@"price"] doubleValue]||SXRT(point[@"date"]).length!=10)return NO;}
+ NSDictionary *report=SXRD(result[@"report"]),*archive=SXRD(report[@"archive"]);if(report.count){NSString *fingerprint=SXRT(archive[@"fingerprint"]);NSCharacterSet *hex=[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"];if(![report[@"version"] isEqual:@2]||fingerprint.length!=64||[fingerprint rangeOfCharacterFromSet:hex.invertedSet].location!=NSNotFound||!SXRT(archive[@"researchId"]).length)return NO;}
+ return YES;
+}
 + (BOOL)finishNexaRequestForCode:(NSString *)code requestID:(NSString *)requestID {
     SXStore *store = SXStore.sharedStore; NSMutableDictionary *requests = [SXRD([store valueForProfileKey:@"nexa.requests" fallback:@{}]) mutableCopy];
     if (![SXRT(requests[code]) isEqualToString:requestID]) return YES;
@@ -109,16 +120,16 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
     if (++self.pollAttempts > 80) { self.statusMessage = @"分析尚未確認完成。稍後可重新開啟這份紀錄；不會自動重跑付費模型。"; [self stopPolling]; [self.refreshControl endRefreshing]; [self rebuild]; return; }
     self.fetching = YES;
     NSString *encoded = [runID stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet];
-    __weak typeof(self) weakSelf = self;
+    __weak typeof(self) weakSelf = self;NSString *workspace=[SXStore.sharedStore.activeProfileUserID copy];
     [SXAPI.sharedAPI requestPath:[@"/api/research/run?id=" stringByAppendingString:encoded] method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
-        typeof(self) self = weakSelf; if (!self) return; self.fetching = NO; [self.refreshControl endRefreshing]; NSDictionary *value = SXRD(json);
+        typeof(self) self = weakSelf; if (!self||!SXRWorkspaceMatches(workspace)) return; self.fetching = NO; [self.refreshControl endRefreshing]; NSDictionary *value = SXRD(json);
         if (error || status != 200) {
             self.statusMessage = status == 404 && [SXRT(self.run[@"status"]) isEqualToString:@"running"] ? @"正在建立原始研究請求，稍後只查詢同一識別碼。" : error.localizedDescription ?: (SXRT(value[@"error"]).length ? value[@"error"] : @"研究狀態暫時無法取得。原始本機紀錄仍保留。");
             [self rebuild]; return;
         }
         NSString *state = SXRT(value[@"status"]);
         if ([self.run[@"status"] isEqual:@"completed"] && ![state isEqual:@"completed"]) return;
-        if ([state isEqualToString:@"completed"] && (![value[@"model"] isEqual:@"gemini-4-argon"] || ![value[@"result"] isKindOfClass:NSDictionary.class])) { self.statusMessage = @"後台結果未通過模型與完整性檢查，尚未覆蓋本機紀錄。"; [self stopPolling]; [self rebuild]; return; }
+        if ([state isEqualToString:@"completed"] && ![SXReportController validateCompletedRun:value forRequest:self.run allowReusedPlan:NO]) { self.statusMessage = @"後台結果未通過識別碼、期間、幣別或價位格式檢查，尚未覆蓋本機紀錄。"; [self stopPolling]; [self rebuild]; return; }
         if ([self.run[@"status"] isEqual:@"completed"] && SXRD(self.run[@"result"]).count && ![self.run[@"result"] isEqual:value[@"result"]]) { self.statusMessage = @"後台回傳內容與本機原始研究不同，已保留本機封存；沒有自動改寫預測。"; [self stopPolling]; [self rebuild]; return; }
         if (![@[@"running", @"completed", @"failed"] containsObject:state]) { self.statusMessage = @"後台未回傳可辨識的研究狀態，原始紀錄仍保留。"; [self rebuild]; return; }
         NSMutableDictionary *merged = [self.run mutableCopy]; [merged addEntriesFromDictionary:value]; merged[@"id"] = runID;
@@ -133,9 +144,9 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 - (void)fetchMonitor {
     if (!self.visible || self.monitoring || ![self.run[@"kind"] isEqual:@"plan"] || ![self.run[@"status"] isEqual:@"completed"]) return;
     NSString *symbol = [SXStore.sharedStore sourceSymbolForCode:SXRT(self.run[@"code"])]; if (!symbol.length) return;
-    self.monitoring = YES; NSString *runID = SXRT(self.run[@"id"]); __weak typeof(self) weakSelf = self;
+    self.monitoring = YES; NSString *runID = SXRT(self.run[@"id"]); __weak typeof(self) weakSelf = self;NSString *workspace=[SXStore.sharedStore.activeProfileUserID copy];
     [SXAPI.sharedAPI requestPath:[@"/api/research/monitor?symbol=" stringByAppendingString:[symbol stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet]] method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
-        typeof(self) self = weakSelf; if (!self) return; self.monitoring = NO; if (![SXRT(self.run[@"id"]) isEqualToString:runID]) return;
+        typeof(self) self = weakSelf; if (!self||!SXRWorkspaceMatches(workspace)) return; self.monitoring = NO; if (![SXRT(self.run[@"id"]) isEqualToString:runID]) return;
         NSDictionary *value = SXRD(json);
         if (!error && status == 200 && [value[@"runId"] isEqual:runID] && SXFiniteNumber(value[@"price"]) && [@[@"within", @"risk", @"target"] containsObject:SXRT(value[@"state"])]) self.monitor = value;
         else self.monitor = @{@"unavailable": @YES, @"notice": !error && status == 200 && ![value[@"runId"] isEqual:runID] ? @"後台最新計畫已換版，這份歷史封存不套用新版條件。" : @"即時條件暫時無法核對；原始計畫與研究價位仍保留。"};
@@ -161,9 +172,9 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 }
 - (void)evaluateForecast {
     if (self.evaluating) return; self.evaluating = YES; [self updateMenu];
-    NSString *encoded = [SXRT(self.run[@"id"]) stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet]; __weak typeof(self) weakSelf = self;
+    NSString *encoded = [SXRT(self.run[@"id"]) stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.alphanumericCharacterSet]; __weak typeof(self) weakSelf = self;NSString *workspace=[SXStore.sharedStore.activeProfileUserID copy];
     [SXAPI.sharedAPI requestPath:[@"/api/research/evaluate?id=" stringByAppendingString:encoded] method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
-        typeof(self) self = weakSelf; if (!self) return; self.evaluating = NO;
+        typeof(self) self = weakSelf; if (!self||!SXRWorkspaceMatches(workspace)) return; self.evaluating = NO;
         if (error || status != 200 || ![json isKindOfClass:NSDictionary.class]) { [self updateMenu]; SXShowError(self, @"行情核對暫時無法完成", error.localizedDescription ?: (SXRT(SXRD(json)[@"error"]).length ? SXRD(json)[@"error"] : @"正式交易日資料尚未齊備。")); return; }
         self.evaluation = json; self.selectedTab = 5; self.tabs.selectedSegmentIndex = UISegmentedControlNoSegment; [self rebuild];
     }];
