@@ -27,9 +27,14 @@ jobs:
       - name: Check chart calculations and archived price fidelity
         run: node --test scripts/chart-core.test.mjs
       - name: Compile native iOS app without Apple signing credentials
+        id: native_compile
         run: bash scripts/build-ipa.sh
       - name: Verify native simulator launch and screens
         run: bash scripts/verify-simulator.sh
+      - name: Exercise real non-Yahoo market providers
+        id: market_sources
+        continue-on-error: true
+        run: bash scripts/verify-market-sources.sh
       - name: Prepare official XcodeGen 2.46.0
         shell: bash
         run: |
@@ -59,8 +64,9 @@ jobs:
           set -euo pipefail
           mkdir -p build/ui-tests
           bash scripts/test-ui.sh 2>&1 | tee build/ui-tests/test-ui.log
-      - name: Verify real non-Yahoo market providers
-        run: bash scripts/verify-market-sources.sh
+      - name: Require genuine provider evidence
+        if: always() && steps.native_compile.outcome == 'success'
+        run: python3 -c 'import json; r=json.load(open("build/market-provider-smoke.json")); print(r); assert r["passed"] and not r["fixtureMode"],r'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

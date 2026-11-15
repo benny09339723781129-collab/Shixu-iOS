@@ -12,6 +12,8 @@ configs:
   Release: release
 settings:
   base:
+    PRODUCT_NAME: "$(TARGET_NAME)"
+    ALWAYS_SEARCH_USER_PATHS: NO
     CLANG_ENABLE_OBJC_ARC: YES
     ENABLE_USER_SCRIPT_SANDBOXING: NO
     SWIFT_VERSION: "5.0"
@@ -21,6 +23,7 @@ settings:
   configs:
     Debug:
       GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "DEBUG=1"]
+      ONLY_ACTIVE_ARCH: YES
     Release:
       GCC_PREPROCESSOR_DEFINITIONS: ["$(inherited)", "DEBUG=0"]
 targets:
@@ -77,6 +80,8 @@ targets:
       - target: Shixu
     settings:
       base:
+        PRODUCT_NAME: ShixuJourneyTests
+        PRODUCT_MODULE_NAME: ShixuJourneyTests
         PRODUCT_BUNDLE_IDENTIFIER: app.shixu.studio.uitests
         GENERATE_INFOPLIST_FILE: YES
         TEST_TARGET_NAME: Shixu
