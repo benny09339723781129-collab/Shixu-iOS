@@ -299,7 +299,7 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     }];
     [cash sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [SXPortfolioText(b[@"date"]) compare:SXPortfolioText(a[@"date"])]; }];
     self.positions = positions; self.cashEntries = cash;
-    [self updateSortMenu]; [self.tableView reloadData];
+    [self updateSortMenu]; CGPoint offset=self.tableView.contentOffset;[UIView performWithoutAnimation:^{[self.tableView reloadData];[self.tableView layoutIfNeeded];}];if(!self.tableView.dragging&&!self.tableView.decelerating){CGFloat maximum=MAX(-self.tableView.adjustedContentInset.top,self.tableView.contentSize.height-self.tableView.bounds.size.height+self.tableView.adjustedContentInset.bottom);offset.y=MAX(-self.tableView.adjustedContentInset.top,MIN(maximum,offset.y));self.tableView.contentOffset=offset;}
 }
 - (void)updateSortMenu {
     __weak typeof(self) weakSelf = self; NSMutableArray *actions = [NSMutableArray array];
@@ -321,14 +321,15 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     return 1;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    section=[self logicalSection:section];
+    section=[self logicalSection:section];if(section==0)return nil;
     return @[@"資產總覽", @"資產配置", @"目前持股", @"可用資金帳", @"備份"][(NSUInteger)section];
 }
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {return section==0?8:32;}
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     section=[self logicalSection:section];
     if (section == 0) {
         NSString *coverage = [self.summary[@"total"] integerValue] ? [NSString stringWithFormat:@"已取得 %@ / %@ 檔行情。", self.summary[@"priced"], self.summary[@"total"]] : @"尚未登錄持股。";
-        return [self.summary[@"stale"] integerValue] ? [coverage stringByAppendingFormat:@"%@ 檔更新暫停，估值採上次報價。", self.summary[@"stale"]] : [coverage stringByAppendingString:@"下拉可更新。美股與台股分幣別計算。"];
+        return [self.summary[@"stale"] integerValue] ? [coverage stringByAppendingFormat:@"%@ 檔更新暫停，估值採上次報價。", self.summary[@"stale"]] : [coverage stringByAppendingString:@"下拉更新；USD／TWD 分開計算。"];
     }
     if (section == 1) {
         NSString *note = @"配置占比以同幣別現金加持股市值計算；缺少行情時暫不顯示完整比例。";
@@ -358,6 +359,7 @@ static NSNumber *SXPortfolioInput(NSString *text) {
         UILabel *assets=[UILabel new];assets.text=SXMoney(self.summary[@"assets"],self.currency);assets.font=[UIFont preferredFontForTextStyle:UIFontTextStyleLargeTitle];assets.adjustsFontForContentSizeCategory=YES;assets.numberOfLines=0;
         UILabel *cash=[UILabel new];cash.text=[NSString stringWithFormat:@"可用資金  %@",SXMoney(self.summary[@"cash"],self.currency)];cash.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];cash.numberOfLines=0;
         UILabel *pnl=[UILabel new];pnl.text=[NSString stringWithFormat:@"持股損益  %@%@",SXMoney(self.summary[@"pnl"],self.currency),SXFiniteNumber(self.summary[@"return"])?[NSString stringWithFormat:@"（%@%%）",SXFormatNumber(self.summary[@"return"],2)]:@""];pnl.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];pnl.textColor=SXFiniteNumber(self.summary[@"pnl"])?SXChangeColor([self.summary[@"pnl"] doubleValue]):UIColor.secondaryLabelColor;pnl.numberOfLines=0;
+        for(UILabel *item in @[label,assets,cash,pnl])item.adjustsFontForContentSizeCategory=YES;
         UIStackView *stack=[[UIStackView alloc] initWithArrangedSubviews:@[label,assets,cash,pnl]];stack.axis=UILayoutConstraintAxisVertical;stack.spacing=8;stack.translatesAutoresizingMaskIntoConstraints=NO;[card.contentView addSubview:stack];[NSLayoutConstraint activateConstraints:@[[stack.topAnchor constraintEqualToAnchor:card.contentView.topAnchor constant:16],[stack.bottomAnchor constraintEqualToAnchor:card.contentView.bottomAnchor constant:-16],[stack.leadingAnchor constraintEqualToAnchor:card.contentView.leadingAnchor constant:18],[stack.trailingAnchor constraintEqualToAnchor:card.contentView.trailingAnchor constant:-18]]];return card;
 
     }

@@ -67,8 +67,8 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     NSString *message = status == 409 ? @"另一個裝置已有較新的雲端備份。這次沒有覆寫，也不會自動重試；請先還原雲端。" : SXSettingsText(SXSettingsDictionary(json)[@"error"]);
     if (!message.length) message = error.localizedDescription ?: @"目前無法連線，請稍後重試。";
     if (status == 409) self.conflict = YES;
-    if(error||status==401)self.accountVerified=NO;
-    [self finishWithMessage:message]; SXShowError(self, status == 409 ? @"備份版本衝突" : @"操作未完成", message); return NO;
+    if((error&&status==0)||status==401)self.accountVerified=NO;
+    [self finishWithMessage:message]; if(!self.presentedViewController)SXShowError(self, status == 409 ? @"備份版本衝突" : @"操作未完成", message); return NO;
 }
 - (void)refreshStatus {
     if (self.busy) { [self.refreshControl endRefreshing]; return; }
@@ -81,17 +81,21 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
         if(([json[@"signedIn"] isEqual:@YES]&&!userID.length)||![controller.store activateProfileForUserID:[json[@"signedIn"] isEqual:@YES]?userID:nil error:&workspaceError]){[controller finishWithMessage:workspaceError.localizedDescription?:@"帳號身分無法驗證，工作區未變更。"];SXShowError(controller,@"工作區未切換",controller.statusMessage);return;}
         if(![controller isCurrentController])return;
         controller.accountStatus = json; controller.statusLoaded = YES;controller.accountVerified=[json[@"signedIn"] isEqual:@YES]&&[userID isEqual:controller.store.activeProfileUserID];
+        controller.store.accountIdentityResolved=YES;
         [controller finishWithMessage:controller.conflict ? @"版本衝突尚未處理，請先還原雲端備份。" : @""];
     }];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
+- (NSInteger)logicalSection:(NSInteger)section {return [@[@0,@2,@1,@3][section] integerValue];}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 1; if (section == 1) return self.signedIn ? 6 : 3; if (section == 2) return 3; return 2;
+    section=[self logicalSection:section];if (section == 0) return 4; if (section == 1) return self.signedIn ? 6 : 3; if (section == 2) return 4; return 2;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    section=[self logicalSection:section];
     return @[@"外觀", @"Google 帳號與雲端備份", self.store.activeProfileUserID?@"目前帳號工作區":@"未登入的本機工作區", @"關於拾序"][(NSUInteger)section];
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    section=[self logicalSection:section];
     if (section == 0) return @"使用 iOS 系統外觀；系統選擇會隨手機的淺色、深色模式切換。";
     if (section == 1) {
         NSString *note = @"每個 Google 帳號與未登入資料分開儲存。只會備份目前帳號工作區；這個版本不會自動備份。還原會先保存本機副本。";
@@ -119,8 +123,9 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     return cell;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    indexPath=[NSIndexPath indexPathForRow:indexPath.row inSection:[self logicalSection:indexPath.section]];
     __weak typeof(self) weakSelf = self; NSInteger row = indexPath.row;
-    if (indexPath.section == 0) return [self detailCell:@"外觀模式" detail:self.themeName symbol:@"circle.lefthalf.filled" disclosure:YES];
+    if (indexPath.section == 0) {if(row==0)return [self detailCell:@"外觀模式" detail:self.themeName symbol:@"circle.lefthalf.filled" disclosure:YES];if(row==1)return [self detailCell:@"漲跌顏色" detail:[[self.store setting:@"up" fallback:@"green"] isEqual:@"red"]?@"紅漲綠跌":@"綠漲紅跌" symbol:@"arrow.up.arrow.down" disclosure:YES];if(row==2)return [self detailCell:@"預設市場" detail:[[self.store setting:@"market" fallback:@"US"] isEqual:@"TW"]?@"台股":@"美股" symbol:@"globe" disclosure:YES];return [self detailCell:@"減少動態" detail:SXReducedMotion()?@"已開啟":@"跟隨系統與標準動畫" symbol:@"figure.walk" disclosure:YES];}
     if (indexPath.section == 1) {
         if (row == 0) {
             NSDictionary *user = SXSettingsDictionary(self.accountStatus[@"user"]), *backup = SXSettingsDictionary(self.accountStatus[@"backup"]);
@@ -137,9 +142,10 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
         return [self buttonCell:@"登出 Google" symbol:@"rectangle.portrait.and.arrow.right" enabled:YES action:^{ [weakSelf confirmSignOut]; }];
     }
     if (indexPath.section == 2) {
-        if (row == 0) return [self buttonCell:@"匯出本機備份" symbol:@"square.and.arrow.up" enabled:YES action:^{ [weakSelf exportLocal]; }];
-        if (row == 1) return [self buttonCell:@"從檔案匯入備份" symbol:@"square.and.arrow.down" enabled:YES action:^{ [weakSelf importLocal]; }];
-        return [self buttonCell:@"預覽並移轉舊版資料" symbol:@"arrow.triangle.2.circlepath" enabled:YES action:^{ [weakSelf migrateLegacy]; }];
+        if (row == 0) return [self localButtonCell:@"匯出本機備份" symbol:@"square.and.arrow.up" action:^{ [weakSelf exportLocal]; }];
+        if (row == 1) return [self localButtonCell:@"從檔案匯入備份" symbol:@"square.and.arrow.down" action:^{ [weakSelf importLocal]; }];
+        if(row==2)return [self localButtonCell:@"預覽並移轉舊版資料" symbol:@"arrow.triangle.2.circlepath" action:^{[weakSelf migrateLegacy];}];
+        return [self localButtonCell:@"還原前副本" symbol:@"clock.arrow.circlepath" action:^{[weakSelf showRestoreCopies];}];
     }
     if (row == 0) {
         NSDictionary *info = NSBundle.mainBundle.infoDictionary; NSString *version = SXSettingsText(info[@"CFBundleShortVersionString"]), *build = SXSettingsText(info[@"CFBundleVersion"]);
@@ -148,7 +154,7 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     return [self detailCell:@"本機紀錄" detail:[NSString stringWithFormat:@"自選 %lu 檔 · 研究 %lu 份 · 持股 %lu 筆", (unsigned long)self.store.watchCodes.count, (unsigned long)self.store.runs.count, (unsigned long)([self.store.account[@"positions"] isKindOfClass:NSArray.class] ? [self.store.account[@"positions"] count] : 0)] symbol:@"externaldrive" disclosure:NO];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES]; if (indexPath.section == 0 && !self.busy) [self pickTheme];
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];if(indexPath.section!=0)return;if(indexPath.row==0){[self pickTheme];return;}if(indexPath.row==1){[self pickPreference:@"up" title:@"漲跌顏色" items:@[@[@"green",@"綠漲紅跌"],@[@"red",@"紅漲綠跌"]]];return;}if(indexPath.row==2){[self pickPreference:@"market" title:@"預設市場" items:@[@[@"US",@"美股"],@[@"TW",@"台股"]]];return;}[self pickPreference:@"reduceMotion" title:@"減少動態" items:@[@[@NO,@"跟隨系統"],@[@YES,@"減少動態"]]];
 }
 - (void)pickTheme {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"外觀模式" message:@"選擇 iOS 系統外觀。" preferredStyle:UIAlertControllerStyleActionSheet];
@@ -241,13 +247,36 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)exportLocal {
-    if (self.busy) return; NSError *error = nil; NSData *data = [self.store exportProfileData:&error];
+    NSError *error = nil; NSData *data = [self.store exportProfileData:&error];
     NSURL *url = [NSFileManager.defaultManager.temporaryDirectory URLByAppendingPathComponent:[NSString stringWithFormat:@"Shixu-Backup-%@.json", NSUUID.UUID.UUIDString]];
     if (!data || ![data writeToURL:url options:NSDataWritingAtomic | NSDataWritingFileProtectionComplete error:&error]) { SXShowError(self, @"無法匯出", error.localizedDescription ?: @"無法建立備份檔案。"); return; }
     SXShare(self, url);
 }
+- (UITableViewCell *)localButtonCell:(NSString *)title symbol:(NSString *)symbol action:(void (^)(void))action {
+    UITableViewCell *cell=[self buttonCell:title symbol:symbol enabled:YES action:action];
+    for(UIView *view in cell.contentView.subviews)if([view isKindOfClass:UIButton.class]){((UIButton *)view).enabled=YES;view.accessibilityIdentifier=[title isEqual:@"匯出本機備份"]?@"settings.export":nil;}
+    return cell;
+}
+- (void)pickPreference:(NSString *)key title:(NSString *)title items:(NSArray *)items {
+    UIAlertController *sheet=[UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    for(NSArray *item in items)[sheet addAction:[UIAlertAction actionWithTitle:item[1] style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){if(![self.store setSetting:item[0] forKey:key])SXShowError(self,@"設定未儲存",self.store.persistenceError?:@"請重試。");[self.tableView reloadData];}]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];sheet.popoverPresentationController.sourceView=self.view;sheet.popoverPresentationController.sourceRect=CGRectMake(CGRectGetMidX(self.view.bounds),100,1,1);[self presentViewController:sheet animated:YES completion:nil];
+}
+- (void)showRestoreCopies {
+    NSArray<NSURL *> *copies=[self.store restoreCopiesForActiveProfile];if(!copies.count){SXShowError(self,@"尚無還原前副本",@"每次匯入或還原前，會在目前工作區保留一份原檔。");return;}
+    UIAlertController *sheet=[UIAlertController alertControllerWithTitle:@"還原前副本" message:@"只列出目前工作區的副本。選取後可匯出，或預覽後還原。" preferredStyle:UIAlertControllerStyleActionSheet];
+    NSUInteger index=0;for(NSURL *url in copies){if(index++>=8)break;NSDate *date=nil;[url getResourceValue:&date forKey:NSURLContentModificationDateKey error:nil];NSString *title=[NSString stringWithFormat:@"%@ · 副本 %lu",date?SXDateLabel(@(date.timeIntervalSince1970*1000)):@"日期未記錄",(unsigned long)index];[sheet addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){[self chooseRestoreCopy:url title:title];}]];}
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];sheet.popoverPresentationController.sourceView=self.view;sheet.popoverPresentationController.sourceRect=CGRectMake(CGRectGetMidX(self.view.bounds),200,1,1);[self presentViewController:sheet animated:YES completion:nil];
+}
+- (void)chooseRestoreCopy:(NSURL *)url title:(NSString *)title {
+    if(![self isCurrentController]||![[self.store restoreCopiesForActiveProfile] containsObject:url])return;
+    UIAlertController *sheet=[UIAlertController alertControllerWithTitle:title message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"匯出這份副本" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){if([[self.store restoreCopiesForActiveProfile] containsObject:url])SXShare(self,url);}]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"預覽並還原" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){if(![[self.store restoreCopiesForActiveProfile] containsObject:url])return;self.requestGeneration+=1;self.busy=NO;self.accountVerified=NO;NSData *bytes=[NSData dataWithContentsOfURL:url];id profile=bytes.length&&bytes.length<=8*1024*1024?[NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil]:nil;if(![profile isKindOfClass:NSDictionary.class]){SXShowError(self,@"無法讀取副本",@"原有資料未變更。");return;}[self confirmRestore:profile source:title completion:nil];}]];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];sheet.popoverPresentationController.sourceView=self.view;sheet.popoverPresentationController.sourceRect=CGRectMake(CGRectGetMidX(self.view.bounds),200,1,1);[self presentViewController:sheet animated:YES completion:nil];
+}
 - (void)importLocal {
-    if (self.busy) return;
+    self.requestGeneration+=1;self.busy=NO;self.accountVerified=NO;
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeJSON] asCopy:YES];
     picker.delegate = self; picker.allowsMultipleSelection = NO;
     [self presentViewController:picker animated:YES completion:nil];
@@ -266,6 +295,7 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     };
     if (controller.presentingViewController) [controller dismissViewControllerAnimated:YES completion:finish]; else finish();
 }
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {[self refreshStatus];}
 - (void)confirmRestore:(NSDictionary *)profile source:(NSString *)source completion:(void (^ _Nullable)(void))completion {
     NSDictionary *values = SXSettingsDictionary(profile[@"values"]), *account = SXSettingsDictionary(values[@"account.v1"]);
     NSUInteger watch = [values[@"watch"] isKindOfClass:NSArray.class] ? [values[@"watch"] count] : 0;
@@ -288,7 +318,7 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)migrateLegacy {
-    if (self.busy) return; self.busy = YES;NSUInteger generation=++self.requestGeneration;NSString *workspace=self.store.activeProfileUserID; __weak typeof(self) weakSelf = self;
+    self.busy = YES;self.accountVerified=NO;NSUInteger generation=++self.requestGeneration;NSString *workspace=self.store.activeProfileUserID; __weak typeof(self) weakSelf = self;
     [[SXSession sharedSession] readLegacyProfileWithCompletion:^(NSDictionary *profile, NSError *error) {
         SXSettingsController *controller = weakSelf; if (!controller || ![controller requestCurrent:generation userID:workspace]) return; controller.busy = NO;
         if (error || !profile) { [controller finishWithMessage:error.localizedDescription ?: @"未取得舊版資料，原有資料仍保留。"];

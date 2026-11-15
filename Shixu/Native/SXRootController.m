@@ -9,13 +9,21 @@
 #import "SXSession.h"
 #import "SXUI.h"
 #import "SXNativeChecks.h"
+#import "SXMarketSourceChecks.h"
 @interface SXRootController () <UITabBarControllerDelegate>
 @end
 @implementation SXRootController
 - (void)viewDidLoad {
- [super viewDidLoad];self.view.backgroundColor=UIColor.systemBackgroundColor;self.view.tintColor=[UIColor colorWithRed:.22 green:.54 blue:.40 alpha:1];
+ [super viewDidLoad];
+#if DEBUG
+ if([NSProcessInfo.processInfo.arguments containsObject:@"--market-source-smoke"]){SXRunMarketSourceChecks();return;}
+#endif
+ self.view.backgroundColor=UIColor.systemBackgroundColor;self.view.tintColor=[UIColor colorWithRed:.22 green:.54 blue:.40 alpha:1];
  [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(workspaceChanged:) name:SXStoreDidChangeNotification object:[SXStore sharedStore]];
  self.delegate=self;
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000
+ if(@available(iOS 26.0,*))self.tabBarMinimizeBehavior=UITabBarMinimizeBehaviorNever;
+#endif
 #if DEBUG
  if([NSProcessInfo.processInfo.arguments containsObject:@"--ui-fixtures"]){SXStore.sharedStore.accountIdentityResolved=YES;if([NSProcessInfo.processInfo.arguments containsObject:@"--ui-dark"])[SXStore.sharedStore setSetting:@"dark" forKey:@"theme"];if([NSProcessInfo.processInfo.arguments containsObject:@"--ui-reduce-motion"])[SXStore.sharedStore setSetting:@YES forKey:@"reduceMotion"];[self buildTabs];SXRunNativeChecks();return;}
 #endif

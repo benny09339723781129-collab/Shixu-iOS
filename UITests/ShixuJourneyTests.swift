@@ -186,7 +186,13 @@ final class ShixuJourneyTests: XCTestCase {
 
         require("chart.indicators").tap()
         replaceText(require("chart.ma.0"), with: "10")
-        require("chart.ma.save").tap()
+        let identifiedSave = element("chart.ma.save")
+        if identifiedSave.exists { identifiedSave.tap() }
+        else {
+            let apply = app.alerts.buttons["套用"].firstMatch
+            XCTAssertTrue(apply.waitForExistence(timeout: 3), "The MA dialog has no Apply action")
+            apply.tap()
+        }
         waitUntil("MA period was not applied to the chart") {
             (self.chartState()["ma"] as? [NSNumber])?.contains(where: { $0.intValue == 10 }) == true
         }
@@ -230,7 +236,10 @@ final class ShixuJourneyTests: XCTestCase {
     func test04SearchNVDAAndOpenStock() {
         launch()
         tapTab("行情")
-        let search = require("market.search")
+        // The UISearchBar container and its UITextField may share an identifier.
+        // Type into the actual search field, never the outer bar container.
+        let search = app.searchFields.matching(identifier: "market.search").firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5) && search.isHittable, "Market search field is not visible")
         search.tap()
         search.typeText("NVDA")
         require("stock.NVDA").tap()

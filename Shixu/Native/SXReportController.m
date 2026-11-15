@@ -2,6 +2,7 @@
 #import "SXStore.h"
 #import "SXAPI.h"
 #import "SXUI.h"
+#import "SXTradingChart.h"
 #import <SafariServices/SafariServices.h>
 #import <math.h>
 
@@ -38,6 +39,8 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 @property(nonatomic) BOOL evaluating;
 @property(nonatomic,strong) NSDictionary *monitor;
 @property(nonatomic) BOOL monitoring;
+@property(nonatomic) NSInteger priceMode;
+@property(nonatomic,strong) SXTradingChart *forecastChart;
 @end
 
 @implementation SXReportController
@@ -243,6 +246,7 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 }
 - (void)addPrices:(NSMutableArray *)sections analysis:(NSDictionary *)a currency:(NSString *)currency {
     NSMutableArray *rows = [NSMutableArray new];
+    if(self.selectedTab==1){[rows addObject:@{@"kind":@"price-mode"}];if(self.priceMode==0&&SXRA(a[@"daily"]).count){[rows addObject:@{@"kind":@"price-chart",@"points":SXRA(a[@"daily"]),@"latestClose":SXFiniteNumber(a[@"latestClose"])?a[@"latestClose"]:NSNull.null}];SXRSection(sections,@"原始預測路徑",rows);NSMutableArray *note=[NSMutableArray new];SXRRow(note,@"價位來源",@"藍線為原始預測，虛線為原始高低範圍；日期與價位不補點、不改寫。",nil);SXRRow(note,@"區間解讀",a[@"boundsMeaning"],nil);SXRSection(sections,@"價格說明",note);return;}}
     for (id value in SXRA(a[@"daily"])) { NSDictionary *point = SXRD(value); if (!point.count) continue;
         NSString *title = [NSString stringWithFormat:@"%@ · 第 %@ 個交易日", SXRT(point[@"date"]), SXFormatNumber(point[@"day"], 0)];
         NSMutableArray *detail = [NSMutableArray arrayWithObject:[NSString stringWithFormat:@"收盤 %@\n低 %@　高 %@", SXMoney(point[@"price"], currency), SXMoney(point[@"low"], currency), SXMoney(point[@"high"], currency)]];
@@ -357,7 +361,14 @@ static void SXRMetrics(NSMutableArray *rows, NSDictionary *values, NSArray<NSArr
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { (void)tableView; return self.sections.count; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section { (void)tableView; return SXRA(self.sections[section][@"rows"]).count; }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section { (void)tableView; return SXRT(self.sections[section][@"title"]); }
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {NSString *kind=self.sections[indexPath.section][@"rows"][indexPath.row][@"kind"];return [kind isEqual:@"price-chart"]?320:[kind isEqual:@"price-mode"]?52:UITableViewAutomaticDimension;}
+- (void)priceModeChanged:(UISegmentedControl *)control {self.priceMode=control.selectedSegmentIndex;SXTransition(self.tableView,^{[self rebuild];});}
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    NSDictionary *special=self.sections[indexPath.section][@"rows"][indexPath.row];NSString *kind=special[@"kind"];
+    if([kind isEqual:@"price-mode"]||[kind isEqual:@"price-chart"]){UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];cell.selectionStyle=UITableViewCellSelectionStyleNone;UIView *view;
+        if([kind isEqual:@"price-mode"]){UISegmentedControl *mode=[[UISegmentedControl alloc] initWithItems:@[@"走勢圖",@"價格表"]];mode.selectedSegmentIndex=self.priceMode;mode.accessibilityIdentifier=@"report.price-mode";[mode addTarget:self action:@selector(priceModeChanged:) forControlEvents:UIControlEventValueChanged];view=mode;}
+        else {if(!self.forecastChart)self.forecastChart=[[SXTradingChart alloc] initWithFrame:CGRectZero];self.forecastChart.forecast=special[@"points"];self.forecastChart.latestClose=SXFiniteNumber(special[@"latestClose"])?special[@"latestClose"]:nil;[self.forecastChart render];view=self.forecastChart;[view removeFromSuperview];}
+        view.translatesAutoresizingMaskIntoConstraints=NO;[cell.contentView addSubview:view];CGFloat inset=[kind isEqual:@"price-mode"]?8:0;[NSLayoutConstraint activateConstraints:@[[view.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor constant:inset],[view.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor constant:-inset],[view.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:inset],[view.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-inset]]];return cell;}
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"ReportText"]; if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"ReportText"];
     NSDictionary *row = self.sections[indexPath.section][@"rows"][indexPath.row]; cell.textLabel.text = SXRT(row[@"title"]); cell.detailTextLabel.text = SXRT(row[@"detail"]);
     cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline]; cell.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody]; cell.textLabel.adjustsFontForContentSizeCategory = YES; cell.detailTextLabel.adjustsFontForContentSizeCategory = YES;

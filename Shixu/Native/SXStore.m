@@ -117,7 +117,7 @@ static BOOL ValidValues(id values){
  NSData *bytes=valid?[NSJSONSerialization dataWithJSONObject:profile options:0 error:nil]:nil;if(bytes.length>8*1024*1024||!bytes)valid=NO;
  if(!valid){if(error)*error=[NSError errorWithDomain:@"SXStore" code:1 userInfo:@{NSLocalizedDescriptionKey:@"備份格式不正確，原有資料仍保留。"}];return NO;}
  if(!replace&&[self hasPersonalData]){if(error)*error=[NSError errorWithDomain:@"SXStore" code:2 userInfo:@{NSLocalizedDescriptionKey:@"已有原生紀錄，請先匯出，再明確選擇要還原的版本。"}];return NO;}
- if([NSFileManager.defaultManager fileExistsAtPath:self.profileURL.path]){NSURL *copy=[self.profileURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:[NSString stringWithFormat:@"before-import-%@.json",NSUUID.UUID.UUIDString]];if(![NSFileManager.defaultManager copyItemAtURL:self.profileURL toURL:copy error:error])return NO;}
+ if([NSFileManager.defaultManager fileExistsAtPath:self.profileURL.path]){NSURL *copy=[self.profileURL.URLByDeletingLastPathComponent URLByAppendingPathComponent:[NSString stringWithFormat:@"before-import-%@-%@.json",self.profileURL.lastPathComponent.stringByDeletingPathExtension,NSUUID.UUID.UUIDString]];if(![NSFileManager.defaultManager copyItemAtURL:self.profileURL toURL:copy error:error])return NO;}
  NSMutableDictionary *before=self.values;NSString *previousError=self.persistenceError;NSError *previousWriteError=self.lastWriteError;
  self.values=[values mutableCopy];self.persistenceError=nil;self.lastWriteError=nil;
  if([self persist])return YES;
@@ -126,4 +126,5 @@ static BOOL ValidValues(id values){
  if(error){NSMutableDictionary *details=[@{NSLocalizedDescriptionKey:writeMessage} mutableCopy];if(writeError)details[NSUnderlyingErrorKey]=writeError;*error=[NSError errorWithDomain:@"SXStore" code:3 userInfo:details];}return NO;
 }
 - (BOOL)hasPersonalData {return self.runs.count||self.watchCodes.count||[self.account[@"positions"] count]||[self.account[@"cash"] count]||[[self.values.allKeys filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF BEGINSWITH 'note.'"]] count];}
+- (NSArray<NSURL *> *)restoreCopiesForActiveProfile {NSString *prefix=[NSString stringWithFormat:@"before-import-%@-",self.profileURL.lastPathComponent.stringByDeletingPathExtension];NSArray *files=[NSFileManager.defaultManager contentsOfDirectoryAtURL:self.profileURL.URLByDeletingLastPathComponent includingPropertiesForKeys:@[NSURLContentModificationDateKey] options:0 error:nil];NSMutableArray *copies=[NSMutableArray new];for(NSURL *url in files)if([url.lastPathComponent hasPrefix:prefix]&&[url.pathExtension isEqual:@"json"])[copies addObject:url];return [copies sortedArrayUsingComparator:^NSComparisonResult(NSURL *a,NSURL *b){NSDate *ad=nil,*bd=nil;[a getResourceValue:&ad forKey:NSURLContentModificationDateKey error:nil];[b getResourceValue:&bd forKey:NSURLContentModificationDateKey error:nil];return [(bd?:NSDate.distantPast) compare:ad?:NSDate.distantPast];}];}
 @end

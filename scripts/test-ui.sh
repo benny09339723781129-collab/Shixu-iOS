@@ -122,8 +122,8 @@ try:
     # Inspect only the dedicated public chart folder. Never include the workspace,
     # signing data, backend files, output archives or private test configuration.
     chart = root / 'Shixu' / 'Resources' / 'Chart'
-    allowed = {'index.html', 'chart.js', 'lightweight-charts.standalone.production.js', 'LICENSE', 'LICENSE.txt', 'NOTICE.txt', 'LICENSE/NOTICE.txt'}
-    required = {'index.html', 'chart.js', 'lightweight-charts.standalone.production.js'}
+    allowed = {'index.html', 'chart.js', 'chart-core.js', 'lightweight-charts.standalone.production.js', 'LICENSE', 'LICENSE.txt', 'NOTICE.txt', 'LICENSE/NOTICE.txt'}
+    required = {'index.html', 'chart.js', 'chart-core.js', 'lightweight-charts.standalone.production.js'}
     present = {str(path.relative_to(chart)) for path in chart.rglob('*') if path.is_file()} if chart.is_dir() else set()
     if not required.issubset(present) or present - allowed:
         raise RuntimeError('Chart resource allowlist mismatch; missing=' + str(sorted(required-present)) + ', unexpected=' + str(sorted(present-allowed)))

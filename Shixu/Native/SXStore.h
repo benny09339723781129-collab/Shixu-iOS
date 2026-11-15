@@ -31,5 +31,6 @@ FOUNDATION_EXPORT NSNotificationName const SXQuotesDidChangeNotification;
 - (nullable NSData *)exportProfileData:(NSError **)error;
 - (BOOL)importProfile:(NSDictionary *)profile replace:(BOOL)replace error:(NSError **)error;
 - (BOOL)hasPersonalData;
+- (NSArray<NSURL *> *)restoreCopiesForActiveProfile;
 @end
 NS_ASSUME_NONNULL_END

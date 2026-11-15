@@ -132,16 +132,16 @@ static NSDictionary *MarketBar(NSString *date, id open, id high, id low, id clos
     if([self fixture:[NSString stringWithFormat:@"/api/chart?symbol=%@&interval=1d",symbol] completion:completion])return;
     NSString *key=[@"history:" stringByAppendingString:code];id cached=[self cached:key seconds:300];if(cached){completion(cached,nil);return;}
     if([stock[@"market"] isEqual:@"TW"]) {
-        [self months:code offset:0 rows:[NSMutableArray new] completion:^(NSArray *rows){if(!rows.count){completion(nil,MarketError());return;}NSDictionary *value=@{@"rows":rows,@"source":[stock[@"exchange"] isEqual:@"上櫃"]?@"TPEx":@"TWSE",@"currency":@"TWD"};[self save:value key:key];completion(value,nil);}];return;
+        [self months:code offset:0 rows:[NSMutableArray new] failed:NO completion:^(NSArray *rows){if(!rows.count){completion(nil,MarketError());return;}NSDictionary *value=@{@"rows":rows,@"source":[stock[@"exchange"] isEqual:@"上櫃"]?@"TPEx":@"TWSE",@"currency":@"TWD"};[self save:value key:key];completion(value,nil);}];return;
     }
     NSDateFormatter *format=[NSDateFormatter new];format.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];format.timeZone=[NSTimeZone timeZoneWithName:@"America/New_York"];format.dateFormat=@"yyyy-MM-dd";
     NSString *start=[format stringFromDate:[NSDate dateWithTimeIntervalSinceNow:-3*366*86400]],*end=[format stringFromDate:NSDate.date];NSString *kind=[stock[@"kind"] isEqual:@"ETF"]?@"etf":@"stocks";
     [self get:[NSString stringWithFormat:@"https://api.nasdaq.com/api/quote/%@/historical?assetclass=%@&fromdate=%@&todate=%@&limit=1000",code,kind,start,end] completion:^(id payload,NSError *error){NSArray *rows=[SXMarketData nasdaqRows:payload symbol:code];if(!rows.count){completion(nil,MarketError());return;}NSDictionary *value=@{@"rows":rows,@"source":@"Nasdaq",@"currency":@"USD"};[self save:value key:key];completion(value,nil);}];
 }
-- (void)months:(NSString *)code offset:(NSInteger)offset rows:(NSMutableArray *)rows completion:(void (^)(NSArray *))completion {
-    if(offset>=12){NSMutableDictionary *days=[NSMutableDictionary new];for(NSDictionary *row in rows)days[row[@"time"]]=row;completion([days.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"time"] compare:b[@"time"]];}]);return;}
-    dispatch_group_t group=dispatch_group_create();
-    for(NSInteger i=offset;i<offset+2;i++){dispatch_group_enter(group);[self month:code offset:i completion:^(NSArray *batch,NSError *error){if(batch.count)[rows addObjectsFromArray:batch];dispatch_group_leave(group);}];}
-    dispatch_group_notify(group,dispatch_get_main_queue(), ^{[self months:code offset:offset+2 rows:rows completion:completion];});
+- (void)months:(NSString *)code offset:(NSInteger)offset rows:(NSMutableArray *)rows failed:(BOOL)failed completion:(void (^)(NSArray *))completion {
+    if(offset>=12){if(failed){completion(@[]);return;}NSMutableDictionary *days=[NSMutableDictionary new];for(NSDictionary *row in rows)days[row[@"time"]]=row;completion([days.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [a[@"time"] compare:b[@"time"]];}]);return;}
+    dispatch_group_t group=dispatch_group_create();__block BOOL failedRequest=failed;
+    for(NSInteger i=offset;i<offset+2;i++){dispatch_group_enter(group);[self month:code offset:i completion:^(NSArray *batch,NSError *error){if(error)failedRequest=YES;if(batch.count)[rows addObjectsFromArray:batch];dispatch_group_leave(group);}];}
+    dispatch_group_notify(group,dispatch_get_main_queue(), ^{[self months:code offset:offset+2 rows:rows failed:failedRequest completion:completion];});
 }
 @end

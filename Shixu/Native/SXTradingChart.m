@@ -16,7 +16,7 @@
 @property(nonatomic,weak) SXTradingChart *chart;
 @end
 @implementation SXChartMessage
-- (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message { if(message.frameInfo.isMainFrame&&message.webView.URL.isFileURL&&[message.body isKindOfClass:NSDictionary.class])[self.chart receive:message.body]; }
+- (void)userContentController:(WKUserContentController *)controller didReceiveScriptMessage:(WKScriptMessage *)message { if(message.frameInfo.isMainFrame&&message.frameInfo.request.URL.isFileURL&&[message.body isKindOfClass:NSDictionary.class])[self.chart receive:message.body]; }
 @end
 @implementation SXTradingChart
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -76,5 +76,6 @@
     decision(WKNavigationActionPolicyCancel);
     if(action.navigationType==WKNavigationTypeLinkActivated&&trading&&[url.scheme isEqual:@"https"])[UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
 }
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {if(!self.remote){self.ready=YES;[self render];}}
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {if(error.code!=NSURLErrorCancelled&&self.readoutChanged)self.readoutChanged(@"圖表來源暫時無法連線，可切回日 K 或稍後重試。");}
 @end

@@ -4,6 +4,9 @@
 #import "SXPortfolioController.h"
 #import "SXReportController.h"
 #import "SXHomeController.h"
+#import "SXMarketData.h"
+#import "SXMarketController.h"
+#import "SXSettingsController.h"
 
 #if DEBUG
 @interface SXStore (SXCheckPersistence)
@@ -11,6 +14,9 @@
 @end
 @interface SXPortfolioController (SXCheckEdit)
 - (void)saveRecord:(NSDictionary *)record cash:(BOOL)cash original:(NSDictionary *)original;
+@end
+@interface SXSettingsController (SXCheckCloud)
+- (BOOL)checkResponse:(id)json status:(NSInteger)status error:(NSError *)error;
 @end
 @interface SXRestoreCheckStore : SXStore
 @property(nonatomic) BOOL failWrite;
@@ -50,6 +56,19 @@ void SXRunNativeChecks(void) {
     __block NSInteger count = 0;
     void (^check)(BOOL, NSString *) = ^(BOOL passed, NSString *message) { count++; if (!passed) [failures addObject:message]; };
     NSData *before = [store exportProfileData:nil];
+    NSDictionary *nasdaq=@{@"data":@{@"symbol":@"AMD",@"tradesTable":@{@"rows":@[@{@"date":@"11/13/2026",@"open":@"$119.00",@"high":@"$122.00",@"low":@"$118.00",@"close":@"$120.00",@"volume":@"1,200"},@{@"date":@"11/12/2026",@"open":@"$116.00",@"high":@"$119.00",@"low":@"$115.00",@"close":@"$118.00",@"volume":@"2,000"}]}}};
+    NSArray *parsed=[SXMarketData nasdaqRows:nasdaq symbol:@"AMD"];check(parsed.count==2&&[parsed.firstObject[@"time"] isEqual:@"2026-11-12"]&&[parsed.lastObject[@"volume"] isEqual:@1200],@"Nasdaq history lost date, ordering, price or share-volume semantics");
+    check([SXMarketData nasdaqRows:nasdaq symbol:@"AAPL"].count==0,@"Nasdaq accepted history for a different symbol");
+    NSArray *dailyRow=@[@"115/11/13",@"1,234",@"0",@"100",@"103",@"99",@"102",@"2"];
+    NSArray *tw=[SXMarketData taiwanRows:@{@"stat":@"OK",@"title":@"115年11月 2330 台積電",@"data":@[dailyRow]} code:@"2330" otc:NO];
+    check(tw.count==1&&[tw[0][@"time"] isEqual:@"2026-11-13"]&&[tw[0][@"volume"] isEqual:@1234],@"TWSE ROC date or share-volume conversion failed");
+    NSArray *otc=[SXMarketData taiwanRows:@{@"tables":@[@{@"subtitle":@"6488 環球晶 115年11月",@"data":@[dailyRow]}]} code:@"6488" otc:YES];
+    check(otc.count==1&&[otc[0][@"volume"] isEqual:@1234000],@"TPEx lots were not converted to shares exactly once");
+    check([SXMarketData taiwanRows:@{@"stat":@"OK",@"title":@"2330",@"data":@[@[@"115/11/13",@"not a volume",@"0",@"100",@"103",@"99",@"102",@"2"]]} code:@"2330" otc:NO].count==0,@"Malformed exchange volume became a fabricated bar");
+    SXSettingsController *conflictController=[SXSettingsController new];[conflictController loadViewIfNeeded];[conflictController setValue:@YES forKey:@"accountVerified"];[conflictController setValue:@{@"signedIn":@YES,@"configured":@YES,@"user":@{@"id":@"qa-only"}} forKey:@"accountStatus"];
+    NSError *conflictError=[NSError errorWithDomain:@"SXQA" code:409 userInfo:nil];[conflictController checkResponse:@{@"error":@"QA revision conflict"} status:409 error:conflictError];
+    UITableViewCell *restoreCell=[conflictController tableView:conflictController.tableView cellForRowAtIndexPath:[NSIndexPath indexPathForRow:3 inSection:2]];UIButton *restoreButton=nil;for(UIView *view in restoreCell.contentView.subviews)if([view isKindOfClass:UIButton.class])restoreButton=(UIButton *)view;
+    check([[conflictController valueForKey:@"accountVerified"] boolValue]&&[[conflictController valueForKey:@"conflict"] boolValue]&&restoreButton.enabled,@"Revision conflict disabled the verified restore path");
     NSArray *invalid = @[
         @{@"version":@1, @"values":@{@"settings":@[]}},
         @{@"version":@1, @"values":@{@"account.v1":@{@"cash":NSNull.null, @"positions":@[]}}},
@@ -161,6 +180,11 @@ void SXRunNativeChecks(void) {
         check([workspaces activateProfileForUserID:@"qa-account-C" error:&switchError]&&[workspaces copyLocalProfileToActiveAccount:&switchError]&&[workspaces.watchCodes isEqual:@[@"AMD"]],@"Explicit anonymous-to-empty-account copy failed");
         check(![workspaces copyLocalProfileToActiveAccount:&switchError],@"Explicit copy overwrote a nonempty account workspace");
         check([workspaces activateProfileForUserID:@"qa-account-A" error:&switchError],@"Could not reopen A for switch-failure check");
+        NSDictionary *sameAccount=[NSJSONSerialization JSONObjectWithData:[workspaces exportProfileData:nil] options:0 error:nil];
+        check([workspaces importProfile:sameAccount replace:YES error:&switchError]&&workspaces.restoreCopiesForActiveProfile.count>0,@"Restore did not expose an owner-scoped pre-restore copy");
+        NSArray *aCopies=workspaces.restoreCopiesForActiveProfile;
+        check([workspaces activateProfileForUserID:@"qa-account-B" error:&switchError]&&workspaces.restoreCopiesForActiveProfile.count==0,@"Account B could see account A pre-restore copies");
+        check([workspaces activateProfileForUserID:@"qa-account-A" error:&switchError]&&[workspaces.restoreCopiesForActiveProfile isEqual:aCopies],@"Returning to A lost its pre-restore copies");
         NSData *aBefore=[workspaces exportProfileData:nil];NSData *corrupt=[@"not a JSON profile" dataUsingEncoding:NSUTF8StringEncoding];[corrupt writeToURL:bURL atomically:YES];
         check(![workspaces activateProfileForUserID:@"qa-account-B" error:&switchError]&&[workspaces.activeProfileUserID isEqual:@"qa-account-A"]&&[[workspaces exportProfileData:nil] isEqual:aBefore]&&[[NSData dataWithContentsOfURL:bURL] isEqual:corrupt],@"Failed target load changed identity or overwrote a workspace");
         workspaces.failWrite=YES;switchError=nil;
