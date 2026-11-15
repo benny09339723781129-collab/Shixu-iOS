@@ -31,11 +31,15 @@ bash scripts/verify-simulator.sh
 node --test scripts/chart-core.test.mjs
 # 需先安裝官方 XcodeGen 2.46.0；操作測試會保存 xcresult、截圖及影片。
 bash scripts/test-ui.sh
+# 小螢幕使用另一個獨立工作，只在既有 iPhone SE 跑可捲動操作流程。
+SHIXU_UI_SUITE=compact bash scripts/test-ui.sh
 # 獨立驗證 AMD／2330 的真實官方 quote／history，不登入、不啟動付費研究。
 bash scripts/verify-market-sources.sh
 ```
 
-模擬器選擇既有 iOS 26 以上裝置，啟動真實原生 APP、執行儲存／還原／帳本／封存等檢查，輸出九個基本頁面與 `native-self-test.json`。操作測試另驗證 tap／輸入／長按／拖曳／雙指縮放、MA、返回、情報、匯出與外觀；圖表除了資料狀態，也檢查實際畫面不是白板。這些是驗收指令，是否通過以各次同來源 CI 紀錄為準。
+模擬器選擇既有 iOS 26 以上裝置，啟動真實原生 APP、執行儲存／還原／帳本／封存等檢查，輸出九個基本頁面與 `native-self-test.json`。個股截圖會等待唯一啟動 ID 的圖表準備訊息，再以原生 frame 裁切螢幕像素，拒絕仍未繪圖的白板；這不會自動接受新的視覺基準。
+
+主要八個操作測試驗證 tap／輸入／長按／拖曳／雙指縮放、MA、返回、情報、匯出與外觀。獨立 compact 工作檢查 SE 上的捲動、圖表／全螢幕、情報／日曆及大字持股，另保存截圖與影片；未跑與通過分別記錄。這些是驗收指令，是否通過以各次同來源 CI 紀錄為準。
 
 測試資料只包含在 DEBUG 模擬器版本；裝置 IPA 不含 fixture 資源或啟動入口。測試不呼叫正式付費模型。真實來源 smoke 會拒絕 fixture 模式，且不在證據檔輸出行情價格。
 

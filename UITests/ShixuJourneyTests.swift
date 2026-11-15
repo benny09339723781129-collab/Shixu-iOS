@@ -272,6 +272,10 @@ final class ShixuJourneyTests: XCTestCase {
         saveScreenshot("chart-fullscreen")
         require("chart.close").tap()
         _ = require("chart.plot")
+        waitUntil("Closing fullscreen left a blank chart or lost the applied MA") {
+            self.paintedCandlePixels() > 30 &&
+            (self.chartState()["ma"] as? [NSNumber])?.contains(where: { $0.intValue == 10 }) == true
+        }
     }
 
     func test04SearchNVDAAndOpenStock() {
@@ -351,5 +355,54 @@ final class ShixuJourneyTests: XCTestCase {
             _ = reveal("holding.AMD")
             saveScreenshot("presentation-\(title)")
         }
+    }
+
+    /// Compact devices intentionally scroll to content. The primary journeys
+    /// retain their first-screen expectations and full gesture/MA assertions.
+    func test09CompactLayoutScrollsToChartAndCalendar() {
+        launch()
+        reveal("stock.AMD", swipes: 5).tap()
+        _ = require("chart.plot", hittable: false)
+        waitUntil("Compact chart did not expose nonempty data and a usable viewport", timeout: 15) {
+            let state = self.chartState()
+            let number: (String) -> Double = { (state[$0] as? NSNumber)?.doubleValue ?? 0 }
+            return number("bars") > 0 && number("visibleTo") > number("visibleFrom") &&
+                number("plotWidth") > 100 && number("plotHeight") > 150 &&
+                number("canvasWidth") > 100 && number("canvasHeight") > 150
+        }
+        _ = reveal("chart.plot")
+        waitUntil("Compact chart has data but its visible screenshot is blank", timeout: 15) {
+            self.paintedCandlePixels() > 30
+        }
+        saveScreenshot("compact-01-stock-chart")
+
+        reveal("chart.fullscreen").tap()
+        _ = require("chart.close")
+        waitUntil("Compact fullscreen chart is blank") { self.paintedCandlePixels() > 30 }
+        saveScreenshot("compact-02-chart-fullscreen")
+        require("chart.close").tap()
+        waitUntil("Compact fullscreen did not dismiss") { !self.element("chart.close").exists }
+        saveScreenshot("compact-03-stock-after-fullscreen")
+        back()
+
+        tapTab("情報")
+        chooseNews("自選")
+        chooseNews("市場")
+        chooseNews("日曆")
+        _ = require("news.calendar")
+        saveScreenshot("compact-04-news-calendar")
+
+        tapTab("持股")
+        _ = reveal("holding.AMD", swipes: 5)
+        saveScreenshot("compact-05-portfolio-scrolled")
+
+        launch(["--ui-large"])
+        tapTab("持股")
+        let largeHolding = reveal("holding.AMD", swipes: 6)
+        // A partially exposed cell may already be tappable. Move its title away
+        // from the floating tab bar for the large-text evidence screenshot.
+        if largeHolding.frame.minY > app.frame.midY { app.tables.firstMatch.swipeUp() }
+        _ = require("holding.AMD")
+        saveScreenshot("compact-06-large-text-portfolio")
     }
 }

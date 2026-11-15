@@ -134,8 +134,8 @@ static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
 @property(nonatomic,copy) void (^closed)(void);
 @end
 @implementation SXChartFullscreenController
-- (void)viewDidLoad {[super viewDidLoad];self.title=@"TradingView 圖表";self.view.backgroundColor=UIColor.systemBackgroundColor;self.chart.translatesAutoresizingMaskIntoConstraints=NO;[self.chart removeFromSuperview];[self.view addSubview:self.chart];[NSLayoutConstraint activateConstraints:@[[self.chart.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],[self.chart.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],[self.chart.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],[self.chart.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor]]];self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:self action:@selector(done)];self.navigationItem.rightBarButtonItem.accessibilityIdentifier=@"chart.close";}
-- (void)done {[self.chart removeFromSuperview];[self dismissViewControllerAnimated:YES completion:self.closed];}
+- (void)viewDidLoad {[super viewDidLoad];self.title=@"TradingView 圖表";self.view.backgroundColor=UIColor.systemBackgroundColor;self.chart.translatesAutoresizingMaskIntoConstraints=NO;[self.chart removeFromSuperview];[self.view addSubview:self.chart];[NSLayoutConstraint activateConstraints:@[[self.chart.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],[self.chart.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],[self.chart.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],[self.chart.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor]]];self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStylePlain target:self action:@selector(done)];self.navigationItem.rightBarButtonItem.accessibilityIdentifier=@"chart.close";}
+- (void)done {[self dismissViewControllerAnimated:!SXReducedMotion() completion:self.closed];}
 @end
 
 @interface SXStockController ()
@@ -150,6 +150,8 @@ static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
 @property(nonatomic,strong) UISegmentedControl *rangeControl;
 @property(nonatomic,strong) UISegmentedControl *contentControl;
 @property(nonatomic,strong) UIView *quoteHeader;
+@property(nonatomic,strong) UIView *chartPlaceholder;
+@property(nonatomic) BOOL chartInFullscreen;
 @end
 @implementation SXStockController
 - (instancetype)initWithCode:(NSString *)code {if((self=[super initWithStyle:UITableViewStyleInsetGrouped])){self.code=code;self.rows=@[];self.fields=@[];self.message=@"正在讀取交易所行情…";}return self;}
@@ -202,7 +204,7 @@ static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
     UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.selectionStyle=UITableViewCellSelectionStyleNone;cell.textLabel.numberOfLines=cell.detailTextLabel.numberOfLines=0;
     if(self.contentControl.selectedSegmentIndex==0){
         if(path.row==0){[self.periodControl removeFromSuperview];MarketPin(self.periodControl,cell.contentView,8);}
-        if(path.row==1){[self.chart removeFromSuperview];MarketPin(self.chart,cell.contentView,0);}
+        if(path.row==1){UIView *plot=self.chartInFullscreen?self.chartPlaceholder:self.chart;if(plot){[plot removeFromSuperview];MarketPin(plot,cell.contentView,0);}}
         if(path.row==2){
             __weak typeof(self) weak=self;UIButton *ma=SXIconButton(@"設定均線",@"slider.horizontal.3",[UIAction actionWithHandler:^(__kindof UIAction *a){[weak editAverages];}]);ma.accessibilityIdentifier=@"chart.indicators";
             UIButton *reset=SXIconButton(@"重設圖表",@"arrow.counterclockwise",[UIAction actionWithHandler:^(__kindof UIAction *a){[weak.chart reset];}]);reset.accessibilityIdentifier=@"chart.reset";
@@ -221,7 +223,11 @@ static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     __weak UIAlertController *weakAlert=alert;UIAlertAction *save=[UIAlertAction actionWithTitle:@"套用" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){NSMutableOrderedSet *periods=[NSMutableOrderedSet new];for(UITextField *field in weakAlert.textFields){NSString *text=[field.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];if(!text.length)continue;NSScanner *scanner=[NSScanner scannerWithString:text];NSInteger value;if(![scanner scanInteger:&value]||!scanner.isAtEnd||value<1||value>500){SXShowError(self,@"週期無效",@"請輸入 1 到 500 的整數。");return;}[periods addObject:@(value)];}if(![SXStore.sharedStore setProfileValue:periods.array forKey:@"chart.averages"]){SXShowError(self,@"未儲存",@"請重試。");return;}self.chart.averages=periods.array;[self.chart render];}];save.accessibilityIdentifier=@"chart.ma.save";[alert addAction:save];[self presentViewController:alert animated:YES completion:nil];
 }
-- (void)fullscreen {SXChartFullscreenController *controller=[SXChartFullscreenController new];controller.chart=self.chart;__weak typeof(self) weak=self;controller.closed=^{weak.chart.translatesAutoresizingMaskIntoConstraints=YES;[weak.tableView reloadData];};UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:controller];nav.modalPresentationStyle=UIModalPresentationFullScreen;[self presentViewController:nav animated:YES completion:nil];}
+- (void)fullscreen {
+    if(self.chartInFullscreen)return;self.chartPlaceholder=[self.chart snapshotViewAfterScreenUpdates:NO];UIView *parent=self.chart.superview;if(parent&&self.chartPlaceholder)MarketPin(self.chartPlaceholder,parent,0);self.chartInFullscreen=YES;
+    SXChartFullscreenController *controller=[SXChartFullscreenController new];controller.chart=self.chart;__weak typeof(self) weak=self;controller.closed=^{SXStockController *stock=weak;if(!stock)return;stock.chartInFullscreen=NO;[stock.chart removeFromSuperview];[stock.tableView reloadData];[stock.tableView layoutIfNeeded];[stock.chartPlaceholder removeFromSuperview];stock.chartPlaceholder=nil;};
+    UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:controller];nav.modalPresentationStyle=UIModalPresentationFullScreen;[self presentViewController:nav animated:!SXReducedMotion() completion:nil];
+}
 @end
 
 @interface SXNewsController () <UICalendarViewDelegate,UICalendarSelectionSingleDateDelegate>
@@ -268,12 +274,12 @@ static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {return self.scope.selectedSegmentIndex==2?@"BLS 等公開日程 · 台北時間":self.message;}
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
     NSArray *items=[self visibleItems];UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.textLabel.numberOfLines=3;cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];cell.detailTextLabel.numberOfLines=2;
-    if(path.row==MAX(1,items.count)){cell.textLabel.text=@"載入較早情報";cell.textLabel.textColor=self.view.tintColor;return cell;}
+    if(path.row==MAX(1,items.count)){cell.textLabel.text=self.scope.selectedSegmentIndex==2?@"更新公開日程":@"載入較早情報";cell.textLabel.textColor=self.view.tintColor;return cell;}
     if(!items.count){cell.textLabel.text=self.scope.selectedSegmentIndex==2?@"這天沒有已取得的經濟事件":self.message;return cell;}
     NSDictionary *item=items[path.row];cell.textLabel.text=item[@"titleZh"]?:item[@"nameZh"]?:item[@"title"]?:item[@"name"]?:@"經濟公告";cell.detailTextLabel.text=[NSString stringWithFormat:@"%@ · %@",item[@"source"]?:@"公開日程",SXDateLabel(item[@"date"])];cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return cell;
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
-    [tableView deselectRowAtIndexPath:path animated:YES];NSArray *items=[self visibleItems];if(path.row==MAX(1,items.count)){self.days=MIN(90,self.days+14);[self refresh];return;}if(!items.count)return;
+    [tableView deselectRowAtIndexPath:path animated:YES];NSArray *items=[self visibleItems];if(path.row==MAX(1,items.count)){if(self.scope.selectedSegmentIndex!=2)self.days=MIN(90,self.days+14);[self refresh];return;}if(!items.count)return;
     NSURL *url=[NSURL URLWithString:items[path.row][@"url"]?:@""];if([url.scheme isEqual:@"https"]&&!([url.host.lowercaseString containsString:@"yahoo."]))[self presentViewController:[[SFSafariViewController alloc] initWithURL:url] animated:YES completion:nil];
 }
 - (UIContextMenuConfiguration *)tableView:(UITableView *)tableView contextMenuConfigurationForRowAtIndexPath:(NSIndexPath *)path point:(CGPoint)point {

@@ -11,6 +11,10 @@
 @property(nonatomic,copy) NSString *remoteSymbol;
 @property(nonatomic,strong) UILabel *fixtureNotice;
 @property(nonatomic) CGSize lastWebSize;
+@property(nonatomic,strong) UIView *loadingView;
+@property(nonatomic,strong) UILabel *loadingLabel;
+@property(nonatomic,strong) UIActivityIndicatorView *loadingIndicator;
+@property(nonatomic) NSUInteger loadGeneration;
 - (void)receive:(NSDictionary *)message;
 @end
 @interface SXChartMessage : NSObject <WKScriptMessageHandler>
@@ -28,13 +32,18 @@
         SXChartMessage *message=[SXChartMessage new];message.chart=self;[configuration.userContentController addScriptMessageHandler:message name:@"chartEvent"];
         self.webView=[[WKWebView alloc] initWithFrame:self.bounds configuration:configuration];self.webView.translatesAutoresizingMaskIntoConstraints=NO;
         self.webView.navigationDelegate=self;self.webView.opaque=NO;self.webView.backgroundColor=UIColor.clearColor;self.webView.scrollView.scrollEnabled=NO;self.webView.scrollView.bounces=NO;self.webView.allowsLinkPreview=NO;
-        self.accessibilityIdentifier=@"chart.plot";self.isAccessibilityElement=YES;self.accessibilityLabel=@"TradingView K 線圖";self.webView.accessibilityIdentifier=@"chart.web";[self addSubview:self.webView];[NSLayoutConstraint activateConstraints:@[[self.webView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],[self.webView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],[self.webView.topAnchor constraintEqualToAnchor:self.topAnchor],[self.webView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]]];[self loadLocal];
+        self.accessibilityIdentifier=@"chart.plot";self.isAccessibilityElement=YES;self.accessibilityLabel=@"TradingView K 線圖";self.webView.accessibilityIdentifier=@"chart.web";[self addSubview:self.webView];[NSLayoutConstraint activateConstraints:@[[self.webView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],[self.webView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],[self.webView.topAnchor constraintEqualToAnchor:self.topAnchor],[self.webView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]]];
+        self.loadingView=[UIView new];self.loadingView.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;self.loadingView.translatesAutoresizingMaskIntoConstraints=NO;[self addSubview:self.loadingView];[NSLayoutConstraint activateConstraints:@[[self.loadingView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],[self.loadingView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],[self.loadingView.topAnchor constraintEqualToAnchor:self.topAnchor],[self.loadingView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]]];
+        self.loadingIndicator=[[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];self.loadingLabel=[UILabel new];self.loadingLabel.text=@"正在準備 TradingView 圖表…";self.loadingLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];self.loadingLabel.adjustsFontForContentSizeCategory=YES;self.loadingLabel.textColor=UIColor.secondaryLabelColor;self.loadingLabel.numberOfLines=0;self.loadingLabel.textAlignment=NSTextAlignmentCenter;UIStackView *loading=[[UIStackView alloc] initWithArrangedSubviews:@[self.loadingIndicator,self.loadingLabel]];loading.axis=UILayoutConstraintAxisVertical;loading.alignment=UIStackViewAlignmentCenter;loading.spacing=12;loading.translatesAutoresizingMaskIntoConstraints=NO;[self.loadingView addSubview:loading];[NSLayoutConstraint activateConstraints:@[[loading.centerXAnchor constraintEqualToAnchor:self.loadingView.centerXAnchor],[loading.centerYAnchor constraintEqualToAnchor:self.loadingView.centerYAnchor],[loading.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.loadingView.leadingAnchor constant:20],[loading.trailingAnchor constraintLessThanOrEqualToAnchor:self.loadingView.trailingAnchor constant:-20]]];[self loadLocal];
     } return self;
 }
 - (void)dealloc { [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"chartEvent"];self.webView.navigationDelegate=nil;[self.webView stopLoading]; }
 - (void)layoutSubviews {[super layoutSubviews];CGSize size=self.bounds.size;if(!CGSizeEqualToSize(size,self.lastWebSize)){self.lastWebSize=size;if(self.ready&&!self.remote&&size.width>0&&size.height>0)[self.webView evaluateJavaScript:@"window.SXChart?.resize()" completionHandler:nil];}}
+- (void)didMoveToWindow {[super didMoveToWindow];if(self.window&&self.ready&&!self.remote)[self.webView evaluateJavaScript:@"window.SXChart?.resize()" completionHandler:nil];}
 - (void)loadLocal {
     self.ready=NO;self.remote=NO;
+    self.loadingView.hidden=NO;self.loadingLabel.text=@"正在準備 TradingView 圖表…";self.accessibilityValue=@"圖表載入中";[self.loadingIndicator startAnimating];NSUInteger generation=++self.loadGeneration;
+    __weak typeof(self) weak=self;dispatch_after(dispatch_time(DISPATCH_TIME_NOW,12*NSEC_PER_SEC),dispatch_get_main_queue(),^{SXTradingChart *chart=weak;if(chart&&generation==chart.loadGeneration&&!chart.remote&&!chart.loadingView.hidden){[chart.loadingIndicator stopAnimating];chart.loadingLabel.text=@"圖表準備較久，請點重設重試。";}});
     NSURL *file=[NSBundle.mainBundle URLForResource:@"index" withExtension:@"html" subdirectory:@"Chart"];
     if(file)[self.webView loadFileURL:file allowingReadAccessToURL:[file URLByDeletingLastPathComponent]];
 }
@@ -48,11 +57,17 @@
     NSString *script=[NSString stringWithFormat:@"window.SXChart.render(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob('%@'),c=>c.charCodeAt(0)))))",[data base64EncodedStringWithOptions:0]];
     [self.webView evaluateJavaScript:script completionHandler:^(id result,NSError *error){if(error && self.readoutChanged)self.readoutChanged(@"圖表載入未完成，請重設後重試。");}];
 }
-- (void)reset {if(!self.remote)[self.webView evaluateJavaScript:@"window.SXChart.reset()" completionHandler:nil];}
+- (void)reset {if(self.remote)return;if(!self.ready||!self.loadingView.hidden){[self loadLocal];return;}[self.webView evaluateJavaScript:@"window.SXChart.reset()" completionHandler:nil];}
 - (void)receive:(NSDictionary *)message {
     if(self.remote)return;
     if([message[@"type"] isEqual:@"ready"]){self.ready=YES;[self render];}
     if([message[@"type"] isEqual:@"readout"] && [message[@"text"] isKindOfClass:NSString.class] && self.readoutChanged)self.readoutChanged(message[@"text"]);
+    if([message[@"type"] isEqual:@"painted"]&&[message[@"plotWidth"] doubleValue]>0&&[message[@"plotHeight"] doubleValue]>0){self.loadingView.hidden=YES;[self.loadingIndicator stopAnimating];
+#if DEBUG
+        NSArray *arguments=NSProcessInfo.processInfo.arguments;NSUInteger index=[arguments indexOfObject:@"--ui-render-id"];NSUUID *runID=index!=NSNotFound&&index+1<arguments.count?[[NSUUID alloc] initWithUUIDString:arguments[index+1]]:nil;
+        CGRect frame=[self convertRect:self.bounds toView:self.window];if(self.window&&runID&&[arguments containsObject:@"--native-self-test"]&&[arguments containsObject:@"--ui-fixtures"]&&[message[@"bars"] integerValue]>0&&[message[@"canvasWidth"] integerValue]>0&&[message[@"canvasHeight"] integerValue]>0){NSString *directory=[NSSearchPathForDirectoriesInDomains(NSCachesDirectory,NSUserDomainMask,YES) firstObject];NSDictionary *proof=@{@"passed":@YES,@"runID":runID.UUIDString,@"bars":message[@"bars"],@"plotWidth":message[@"plotWidth"],@"plotHeight":message[@"plotHeight"],@"canvasWidth":message[@"canvasWidth"],@"canvasHeight":message[@"canvasHeight"],@"windowWidth":@(self.window.bounds.size.width),@"windowHeight":@(self.window.bounds.size.height),@"frame":@{@"x":@(frame.origin.x),@"y":@(frame.origin.y),@"width":@(frame.size.width),@"height":@(frame.size.height)}};NSData *data=[NSJSONSerialization dataWithJSONObject:proof options:NSJSONWritingPrettyPrinted error:nil];[data writeToFile:[directory stringByAppendingPathComponent:[NSString stringWithFormat:@"chart-ready-%@.json",runID.UUIDString]] atomically:YES];}
+#endif
+    }
     if([message[@"type"] isEqual:@"state"]){self.accessibilityValue=[NSString stringWithFormat:@"%@ 根%@，可左右拖曳、雙指縮放或長按查看。",message[@"bars"]?:@0,[message[@"period"] isEqual:@"week"]?@"週 K":@"日 K"];
 #if DEBUG
         if([NSProcessInfo.processInfo.arguments containsObject:@"--ui-fixtures"]){NSMutableDictionary *state=[message mutableCopy];[state removeObjectForKey:@"type"];NSData *data=[NSJSONSerialization dataWithJSONObject:state options:NSJSONWritingSortedKeys error:nil];self.accessibilityValue=data?[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]:@"";}
@@ -61,6 +76,7 @@
 }
 - (void)showIntradayForSymbol:(NSString *)symbol {
     self.remoteSymbol=symbol;
+    self.loadingView.hidden=YES;[self.loadingIndicator stopAnimating];
 #if DEBUG
     if([NSProcessInfo.processInfo.arguments containsObject:@"--ui-fixtures"]){self.remote=YES;self.webView.hidden=YES;[self.fixtureNotice removeFromSuperview];self.fixtureNotice=[UILabel new];self.fixtureNotice.text=@"15 分行情由 TradingView 提供\n隔離測試不連線，也不以日 K 冒充。";self.fixtureNotice.numberOfLines=0;self.fixtureNotice.textAlignment=NSTextAlignmentCenter;self.fixtureNotice.textColor=UIColor.secondaryLabelColor;self.fixtureNotice.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];self.fixtureNotice.frame=CGRectInset(self.bounds,20,20);self.fixtureNotice.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;[self addSubview:self.fixtureNotice];self.accessibilityValue=@"{\"bars\":0,\"period\":\"intraday\",\"visibleFrom\":0,\"visibleTo\":0,\"ma\":[]}";if(self.readoutChanged)self.readoutChanged(@"隔離測試不下載盤中行情；日 K 與週 K 可操作。");return;}
 #endif
@@ -79,5 +95,6 @@
     if(action.navigationType==WKNavigationTypeLinkActivated&&trading&&[url.scheme isEqual:@"https"])[UIApplication.sharedApplication openURL:url options:@{} completionHandler:nil];
 }
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {if(!self.remote){self.ready=YES;[self render];}}
-- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {if(error.code!=NSURLErrorCancelled&&self.readoutChanged)self.readoutChanged(@"圖表來源暫時無法連線，可切回日 K 或稍後重試。");}
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {self.ready=NO;self.loadingView.hidden=NO;[self.loadingIndicator stopAnimating];self.loadingLabel.text=self.remote?@"圖表中斷，請切回日 K 重試。":@"圖表中斷，請點重設重新載入。";}
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {if(error.code!=NSURLErrorCancelled){self.loadingView.hidden=NO;[self.loadingIndicator stopAnimating];self.loadingLabel.text=@"圖表暫時無法載入，請點重設重試。";if(self.readoutChanged)self.readoutChanged(@"圖表來源暫時無法連線，可切回日 K 或稍後重試。");}}
 @end

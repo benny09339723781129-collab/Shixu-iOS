@@ -30,7 +30,11 @@ stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
 output = root / 'build' / 'ui-tests' / (stamp + '-' + str(os.getpid()))
 output.mkdir(parents=True, exist_ok=False)
 deadline = time.monotonic() + 780
-summary = {'passed': False, 'fixtureOnly': True, 'output': str(output), 'destinations': [], 'notes': []}
+suite = os.environ.get('SHIXU_UI_SUITE', 'primary')
+compact_test = 'ShixuJourneyTests/ShixuJourneyTests/test09CompactLayoutScrollsToChartAndCalendar'
+summary = {'passed': False, 'fixtureOnly': True, 'suite': suite, 'output': str(output), 'destinations': [], 'notes': [],
+           'coverage': {'primary': {'plannedTests': 8, 'selection': 'tests01-08', 'status': 'not-run' if suite == 'primary' else 'not-requested'},
+                        'compact': {'plannedTests': 1, 'selection': compact_test, 'status': 'not-run' if suite == 'compact' else 'not-requested'}}}
 results = []
 video = None
 video_log = None
@@ -101,24 +105,37 @@ def test_destination(item, label, maximum):
     boot(item)
     result = output / (label + '.xcresult')
     results.append((label, result))
-    summary['destinations'].append({'label': label, 'name': item['name'], 'udid': item['udid'], 'runtime': item['runtime'], 'result': str(result)})
+    if label == 'primary':
+        group, selection = 'primary', ['-skip-testing:' + compact_test]
+    elif label == 'small-iphone-se':
+        group, selection = 'compact', ['-only-testing:' + compact_test]
+    else:
+        raise RuntimeError('Unknown native UI coverage destination: ' + label)
+    summary['coverage'][group]['status'] = 'running'
+    summary['destinations'].append({'label': label, 'name': item['name'], 'udid': item['udid'], 'runtime': item['runtime'], 'result': str(result),
+                                    'coverageGroup': group, 'plannedTests': summary['coverage'][group]['plannedTests'], 'testSelection': selection})
     video_log = (output / (label + '-recording.log')).open('wb')
     video = subprocess.Popen(['xcrun', 'simctl', 'io', item['udid'], 'recordVideo', '--codec=h264', str(output / (label + '-journeys.mp4'))], stdout=video_log, stderr=subprocess.STDOUT, start_new_session=True)
     try:
-        run(['xcodebuild', 'test', '-project', 'ShixuJourney.xcodeproj', '-scheme', 'ShixuJourney',
-             '-configuration', 'Debug', '-destination', 'platform=iOS Simulator,id=' + item['udid'],
-             '-derivedDataPath', str(output / 'DerivedData'), '-resultBundlePath', str(result),
-             '-parallel-testing-enabled', 'NO', '-maximum-concurrent-test-simulator-destinations', '1',
-             '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '180', '-maximum-test-execution-time-allowance', '180',
-             'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO'], label + '-xcodebuild.log', maximum)
+        command = ['xcodebuild', 'test', '-project', 'ShixuJourney.xcodeproj', '-scheme', 'ShixuJourney',
+                   '-configuration', 'Debug', '-destination', 'platform=iOS Simulator,id=' + item['udid'],
+                   '-derivedDataPath', str(output / 'DerivedData'), '-resultBundlePath', str(result),
+                   '-parallel-testing-enabled', 'NO', '-maximum-concurrent-test-simulator-destinations', '1',
+                   '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '180', '-maximum-test-execution-time-allowance', '180']
+        command += selection + ['CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO']
+        run(command, label + '-xcodebuild.log', maximum)
         summary['destinations'][-1]['passed'] = True
+        summary['coverage'][group]['status'] = 'passed'
     except Exception:
         summary['destinations'][-1]['passed'] = False
+        summary['coverage'][group]['status'] = 'failed'
         raise
     finally:
         stop_video()
 
 try:
+    if suite not in ('primary', 'compact'):
+        raise RuntimeError('SHIXU_UI_SUITE must be primary or compact')
     # Inspect only the dedicated public chart folder. Never include the workspace,
     # signing data, backend files, output archives or private test configuration.
     chart = root / 'Shixu' / 'Resources' / 'Chart'
@@ -132,33 +149,39 @@ try:
     run(['node', 'scripts/generate-fixtures.mjs'], 'fixtures.log', 30)
     run(['xcodegen', 'generate', '--spec', 'project.yml'], 'xcodegen.log', 45)
     available = devices()
-    eligible = [item for item in available if item['version'][0] >= 26]
-    if not eligible:
-        raise RuntimeError('No available iPhone simulator with iOS 26 or later; no device was created or downloaded')
     requested = os.environ.get('SHIXU_UI_SIMULATOR_ID')
-    if requested:
-        primary = next((item for item in eligible if item['udid'] == requested), None)
-        if primary is None:
-            raise RuntimeError('SHIXU_UI_SIMULATOR_ID is not an available iOS 26+ iPhone')
+    if suite == 'primary':
+        eligible = [item for item in available if item['version'][0] >= 26]
+        if not eligible:
+            raise RuntimeError('No available iPhone simulator with iOS 26 or later; no device was created or downloaded')
+        if requested:
+            primary = next((item for item in eligible if item['udid'] == requested), None)
+            if primary is None:
+                raise RuntimeError('SHIXU_UI_SIMULATOR_ID is not an available iOS 26+ iPhone')
+        else:
+            primary = max(eligible, key=lambda item: (item['state'] == 'Booted' and 'iPhone 17 Pro' in item['name'],
+                          'iPhone 17 Pro' in item['name'], item['state'] == 'Booted', item['version']))
+        test_destination(primary, 'primary', min(650, max(1, deadline-time.monotonic()-90)))
+        summary['notes'].append('Primary covers the original eight journeys only; compact SE coverage is a separate SHIXU_UI_SUITE=compact invocation')
     else:
-        primary = max(eligible, key=lambda item: (item['state'] == 'Booted' and 'iPhone 17 Pro' in item['name'],
-                      'iPhone 17 Pro' in item['name'], item['state'] == 'Booted', item['version']))
-    small = sorted((item for item in available if 'iPhone SE' in item['name'] and item['version'][0] >= 16), key=lambda item: item['version'], reverse=True)
-    test_destination(primary, 'primary', min(650, max(1, deadline-time.monotonic()-90)))
-    if small and deadline - time.monotonic() >= 300:
-        test_destination(small[0], 'small-iphone-se', min(300, deadline-time.monotonic()-45))
-    elif small:
-        summary['notes'].append('Available iPhone SE was not run because the bounded test budget had less than 300 seconds remaining')
-    else:
-        summary['notes'].append('No available iPhone SE runtime; no simulator/runtime was installed')
-    summary['passed'] = True
+        small = sorted((item for item in available if 'iPhone SE' in item['name'] and item['version'][0] >= 16), key=lambda item: item['version'], reverse=True)
+        if requested:
+            small = [item for item in small if item['udid'] == requested]
+            if not small:
+                raise RuntimeError('SHIXU_UI_SIMULATOR_ID is not an available iPhone SE with iOS 16 or later')
+        if small:
+            test_destination(small[0], 'small-iphone-se', min(650, max(1, deadline-time.monotonic()-90)))
+        else:
+            summary['coverage']['compact']['status'] = 'unavailable'
+            summary['notes'].append('Compact NOT RUN: no available iPhone SE runtime; no simulator/runtime was installed')
+    summary['passed'] = summary['coverage'][suite]['status'] == 'passed'
 except Exception as error:
     summary['error'] = str(error)
     print(str(error), file=sys.stderr, flush=True)
 finally:
     stop_video()
     # Keep xcresult and its attachment manifest even when a journey fails.
-    # Attachments are named 01..08 by XCTest and explicitly kept on success.
+    # Primary 01..08 and compact-* attachments are explicitly kept on success.
     for label, result in results:
         if not result.exists():
             continue
@@ -179,13 +202,18 @@ finally:
             elif label == 'primary' and summary['passed'] and count < 8:
                 summary['error'] = 'Primary UI run exported fewer than eight screenshots'
                 summary['passed'] = False
+            elif label == 'small-iphone-se' and summary['passed'] and count < 3:
+                summary['error'] = 'Compact UI run exported fewer than three screenshots'
+                summary['coverage']['compact']['status'] = 'evidence-incomplete'
+                summary['passed'] = False
         except Exception as error:
             summary['notes'].append(label + ': attachment export error: ' + str(error))
             summary['passed'] = False
-    recording = output / 'primary-journeys.mp4'
+    recorded_label = summary['destinations'][0]['label'] if summary['destinations'] else 'primary'
+    recording = output / (recorded_label + '-journeys.mp4')
     if summary['passed'] and (not recording.exists() or recording.stat().st_size < 1024):
         summary['passed'] = False
-        summary['error'] = 'The primary journey recording is missing; inspect primary-recording.log'
+        summary['error'] = 'The selected journey recording is missing; inspect ' + recorded_label + '-recording.log'
     (output / 'summary.json').write_text(json.dumps(summary, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
 
