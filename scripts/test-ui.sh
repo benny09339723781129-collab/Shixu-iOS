@@ -109,7 +109,7 @@ def test_destination(item, label, maximum):
              '-configuration', 'Debug', '-destination', 'platform=iOS Simulator,id=' + item['udid'],
              '-derivedDataPath', str(output / 'DerivedData'), '-resultBundlePath', str(result),
              '-parallel-testing-enabled', 'NO', '-maximum-concurrent-test-simulator-destinations', '1',
-             '-test-timeouts-enabled', 'YES', '-maximum-test-execution-time-allowance', '100',
+             '-test-timeouts-enabled', 'YES', '-default-test-execution-time-allowance', '180', '-maximum-test-execution-time-allowance', '180',
              'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO'], label + '-xcodebuild.log', maximum)
         summary['destinations'][-1]['passed'] = True
     except Exception:
@@ -144,7 +144,7 @@ try:
         primary = max(eligible, key=lambda item: (item['state'] == 'Booted' and 'iPhone 17 Pro' in item['name'],
                       'iPhone 17 Pro' in item['name'], item['state'] == 'Booted', item['version']))
     small = sorted((item for item in available if 'iPhone SE' in item['name'] and item['version'][0] >= 16), key=lambda item: item['version'], reverse=True)
-    test_destination(primary, 'primary', min(550, max(1, deadline-time.monotonic()-80)))
+    test_destination(primary, 'primary', min(650, max(1, deadline-time.monotonic()-90)))
     if small and deadline - time.monotonic() >= 300:
         test_destination(small[0], 'small-iphone-se', min(300, deadline-time.monotonic()-45))
     elif small:

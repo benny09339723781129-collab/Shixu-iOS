@@ -168,7 +168,7 @@ static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
 }
 - (void)dealloc {[NSNotificationCenter.defaultCenter removeObserver:self];}
 - (void)viewDidLayoutSubviews {[super viewDidLayoutSubviews];if(fabs(self.quoteHeader.bounds.size.width-self.tableView.bounds.size.width)>1)[self buildQuoteHeader];}
-- (void)traitCollectionDidChange:(UITraitCollection *)previous {[super traitCollectionDidChange:previous];if(self.isViewLoaded&&self.contentControl&&!self.presentedViewController){[self buildQuoteHeader];[self.tableView reloadData];}}
+- (void)traitCollectionDidChange:(UITraitCollection *)previous {[super traitCollectionDidChange:previous];BOOL changed=previous.userInterfaceStyle!=self.traitCollection.userInterfaceStyle||![previous.preferredContentSizeCategory isEqual:self.traitCollection.preferredContentSizeCategory];if(changed&&self.isViewLoaded&&self.contentControl&&!self.presentedViewController){[self buildQuoteHeader];[self.tableView reloadData];}}
 - (void)quoteChanged {[self buildQuoteHeader];}
 - (void)preferencesChanged {if(!self.presentedViewController){[self buildQuoteHeader];[self.chart render];[self.tableView reloadData];}}
 - (void)buildQuoteHeader {
@@ -249,7 +249,7 @@ static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
 }
 - (void)scopeChanged {[self buildHeader];[self.tableView reloadData];[self refresh];}
 - (NSArray *)visibleItems {
-    if(self.scope.selectedSegmentIndex==2){if(!self.selectedDay.length)return self.events;return [self.events filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *item,NSDictionary *bindings){return [[item[@"date"] description] hasPrefix:self.selectedDay];}]];}
+    if(self.scope.selectedSegmentIndex==2){if(!self.selectedDay.length)return self.events;return [self.events filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *item,NSDictionary *bindings){return [SXCalendarDay(item[@"date"]) isEqual:self.selectedDay];}]];}
     NSArray *saved=[SXStore.sharedStore valueForProfileKey:@"intel.bookmarks" fallback:@[]];return [self.items filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *item,NSDictionary *bindings){return [self.kind isEqual:@"all"]||([self.kind isEqual:@"saved"]?[saved containsObject:item[@"id"]?:item[@"url"]]:[item[@"kind"] isEqual:self.kind]);}]];
 }
 - (void)refresh {

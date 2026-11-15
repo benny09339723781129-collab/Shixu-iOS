@@ -31,6 +31,16 @@ jobs:
         run: bash scripts/build-ipa.sh
       - name: Verify native simulator launch and screens
         run: bash scripts/verify-simulator.sh
+      - name: Preserve native screens for review before longer UI journeys
+        if: always() && steps.native_compile.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Shixu-iOS-screen-review
+          path: |
+            build/native-self-test.json
+            build/screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 3
       - name: Exercise real non-Yahoo market providers
         id: market_sources
         continue-on-error: true

@@ -38,7 +38,7 @@
     NSURL *file=[NSBundle.mainBundle URLForResource:@"index" withExtension:@"html" subdirectory:@"Chart"];
     if(file)[self.webView loadFileURL:file allowingReadAccessToURL:[file URLByDeletingLastPathComponent]];
 }
-- (void)traitCollectionDidChange:(UITraitCollection *)previous { [super traitCollectionDidChange:previous];if(self.remote){if(previous.userInterfaceStyle!=self.traitCollection.userInterfaceStyle)[self showIntradayForSymbol:self.remoteSymbol];}else [self render]; }
+- (void)traitCollectionDidChange:(UITraitCollection *)previous { [super traitCollectionDidChange:previous];if(previous.userInterfaceStyle==self.traitCollection.userInterfaceStyle)return;if(self.remote)[self showIntradayForSymbol:self.remoteSymbol];else [self render]; }
 - (void)useLocalChart {self.webView.hidden=NO;[self.fixtureNotice removeFromSuperview];self.fixtureNotice=nil;self.isAccessibilityElement=YES;if(self.remote)[self loadLocal];else[self render];}
 - (void)render {
     if(self.remote || !self.ready)return;

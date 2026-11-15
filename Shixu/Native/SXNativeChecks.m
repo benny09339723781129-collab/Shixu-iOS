@@ -56,6 +56,8 @@ void SXRunNativeChecks(void) {
     __block NSInteger count = 0;
     void (^check)(BOOL, NSString *) = ^(BOOL passed, NSString *message) { count++; if (!passed) [failures addObject:message]; };
     NSData *before = [store exportProfileData:nil];
+    check([SXCalendarDay(@"2026-11-18T19:00:00Z") isEqual:@"2026-11-19"]&&[SXCalendarDay(@"2026-11-18T19:00:00.000Z") isEqual:@"2026-11-19"],@"Economic calendar assigned an overnight UTC event to the wrong Taipei day");
+    check([SXCalendarDay(@"2026-11-18") isEqual:@"2026-11-18"]&&!SXCalendarDay(@"2026-02-30").length&&!SXCalendarDay(NSNull.null).length,@"Economic calendar changed a date-only event or accepted an invalid day");
     NSDictionary *nasdaq=@{@"data":@{@"symbol":@"AMD",@"tradesTable":@{@"rows":@[@{@"date":@"11/13/2026",@"open":@"$119.00",@"high":@"$122.00",@"low":@"$118.00",@"close":@"$120.00",@"volume":@"1,200"},@{@"date":@"11/12/2026",@"open":@"$116.00",@"high":@"$119.00",@"low":@"$115.00",@"close":@"$118.00",@"volume":@"2,000"}]}}};
     NSArray *parsed=[SXMarketData nasdaqRows:nasdaq symbol:@"AMD"];check(parsed.count==2&&[parsed.firstObject[@"time"] isEqual:@"2026-11-12"]&&[parsed.lastObject[@"volume"] isEqual:@1200],@"Nasdaq history lost date, ordering, price or share-volume semantics");
     check([SXMarketData nasdaqRows:nasdaq symbol:@"AAPL"].count==0,@"Nasdaq accepted history for a different symbol");

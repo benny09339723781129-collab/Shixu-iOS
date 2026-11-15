@@ -4,7 +4,7 @@
   const send=(type,value)=>globalThis.webkit?.messageHandlers?.chartEvent?.postMessage({type,...value});
   const format=n=>Number.isFinite(n)?n.toLocaleString('en-US',{maximumFractionDigits:2}):'—';
   const validRange=range=>range&&Number.isFinite(range.from)&&Number.isFinite(range.to)&&range.to>range.from;
-  function emitState(){if(!chart)return;const range=chart.timeScale().getVisibleLogicalRange(),canvas=root.querySelector('canvas');send('state',{bars:rows.length,period,ma:payload.averages||[],visibleFrom:range?.from??0,visibleTo:range?.to??0,plotWidth:root.clientWidth,plotHeight:root.clientHeight,canvasWidth:canvas?.width??0,canvasHeight:canvas?.height??0});}
+  function emitState(){if(!chart)return;const range=chart.timeScale().getVisibleLogicalRange(),canvas=[...root.querySelectorAll('canvas')].sort((a,b)=>b.width*b.height-a.width*a.height)[0];send('state',{bars:rows.length,period,ma:payload.averages||[],visibleFrom:range?.from??0,visibleTo:range?.to??0,plotWidth:root.clientWidth,plotHeight:root.clientHeight,canvasWidth:canvas?.width??0,canvasHeight:canvas?.height??0});}
   function resize(){if(!chart||root.clientWidth<1||root.clientHeight<1)return;chart.resize(root.clientWidth,root.clientHeight,true);if(rows.length&&!validRange(chart.timeScale().getVisibleLogicalRange()))reset();emitState();}
   function readout(event){const row=event?.time?rows.find(row=>row.time===event.time):rows.at(-1);if(!row)return;const text=[row.time,`開 ${format(row.open)}`,`高 ${format(row.high)}`,`低 ${format(row.low)}`,`收 ${format(row.close)}`,`量 ${format(row.volume)}`];for(const n of payload.averages||[]){const value=series.find(s=>s.period===n)?.data.get(row.time);if(Number.isFinite(value))text.push(`MA${n} ${format(value)}`);}send('readout',{text:text.join('  ')});}
   function create(dark){
@@ -28,7 +28,7 @@
     primary=chart.addSeries(L.CandlestickSeries,{upColor:up,downColor:down,wickUpColor:up,wickDownColor:down,borderVisible:false});primary.setData(rows);series.push({line:primary});
     const volume=chart.addSeries(L.HistogramSeries,{priceScaleId:'volume',priceFormat:{type:'volume'},lastValueVisible:false,priceLineVisible:false});volume.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}});volume.setData(rows.map(row=>({time:row.time,value:row.volume,color:(row.close>=row.open?up:down)+'60'})));series.push({line:volume});
     for(const [index,n] of (p.averages||[5,20]).entries()){const points=C.average(rows,n),line=chart.addSeries(L.LineSeries,{color:['#c69a55','#6384b3','#9e76ae','#7d9c62'][index],lineWidth:1,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});line.setData(points);series.push({line,period:n,data:new Map(points.map(x=>[x.time,x.value]))});}
-    if(saved&&!changedPeriod&&!p.reset)chart.timeScale().setVisibleLogicalRange(saved);else reset();
+    if(saved&&!changedPeriod&&!p.reset&&saved.to>=0&&saved.from<rows.length)chart.timeScale().setVisibleLogicalRange(saved);else reset();
     readout();emitState();
   }
   function reset(){if(!chart||!rows.length)return;if(payload.visible>0)chart.timeScale().setVisibleLogicalRange({from:Math.max(-1,rows.length-payload.visible-1),to:rows.length+2});else chart.timeScale().fitContent();emitState();}

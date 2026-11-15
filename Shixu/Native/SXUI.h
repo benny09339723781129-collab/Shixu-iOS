@@ -11,6 +11,7 @@ FOUNDATION_EXPORT NSString *SXMoney(id _Nullable value, NSString *currency);
 FOUNDATION_EXPORT NSString *SXFormatNumber(id _Nullable value, NSInteger decimals);
 FOUNDATION_EXPORT BOOL SXFiniteNumber(id _Nullable value);
 FOUNDATION_EXPORT NSString *SXDateLabel(id _Nullable value);
+FOUNDATION_EXPORT NSString *SXCalendarDay(id _Nullable value);
 FOUNDATION_EXPORT NSString *SXQuoteLabel(NSDictionary * _Nullable quote, BOOL stale);
 FOUNDATION_EXPORT void SXShowError(UIViewController *controller, NSString *title, NSString *message);
 FOUNDATION_EXPORT void SXShare(UIViewController *controller, id item);
