@@ -10,6 +10,7 @@
 @property(nonatomic) BOOL remote;
 @property(nonatomic,copy) NSString *remoteSymbol;
 @property(nonatomic,strong) UILabel *fixtureNotice;
+@property(nonatomic) CGSize lastWebSize;
 - (void)receive:(NSDictionary *)message;
 @end
 @interface SXChartMessage : NSObject <WKScriptMessageHandler>
@@ -25,12 +26,13 @@
         self.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;self.layer.cornerRadius=14;self.clipsToBounds=YES;
         WKWebViewConfiguration *configuration=[WKWebViewConfiguration new];configuration.websiteDataStore=WKWebsiteDataStore.nonPersistentDataStore;
         SXChartMessage *message=[SXChartMessage new];message.chart=self;[configuration.userContentController addScriptMessageHandler:message name:@"chartEvent"];
-        self.webView=[[WKWebView alloc] initWithFrame:self.bounds configuration:configuration];self.webView.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        self.webView=[[WKWebView alloc] initWithFrame:self.bounds configuration:configuration];self.webView.translatesAutoresizingMaskIntoConstraints=NO;
         self.webView.navigationDelegate=self;self.webView.opaque=NO;self.webView.backgroundColor=UIColor.clearColor;self.webView.scrollView.scrollEnabled=NO;self.webView.scrollView.bounces=NO;self.webView.allowsLinkPreview=NO;
-        self.accessibilityIdentifier=@"chart.plot";self.isAccessibilityElement=YES;self.accessibilityLabel=@"TradingView K 線圖";self.webView.accessibilityIdentifier=@"chart.web";[self addSubview:self.webView];[self loadLocal];
+        self.accessibilityIdentifier=@"chart.plot";self.isAccessibilityElement=YES;self.accessibilityLabel=@"TradingView K 線圖";self.webView.accessibilityIdentifier=@"chart.web";[self addSubview:self.webView];[NSLayoutConstraint activateConstraints:@[[self.webView.leadingAnchor constraintEqualToAnchor:self.leadingAnchor],[self.webView.trailingAnchor constraintEqualToAnchor:self.trailingAnchor],[self.webView.topAnchor constraintEqualToAnchor:self.topAnchor],[self.webView.bottomAnchor constraintEqualToAnchor:self.bottomAnchor]]];[self loadLocal];
     } return self;
 }
 - (void)dealloc { [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"chartEvent"];self.webView.navigationDelegate=nil;[self.webView stopLoading]; }
+- (void)layoutSubviews {[super layoutSubviews];CGSize size=self.bounds.size;if(!CGSizeEqualToSize(size,self.lastWebSize)){self.lastWebSize=size;if(self.ready&&!self.remote&&size.width>0&&size.height>0)[self.webView evaluateJavaScript:@"window.SXChart?.resize()" completionHandler:nil];}}
 - (void)loadLocal {
     self.ready=NO;self.remote=NO;
     NSURL *file=[NSBundle.mainBundle URLForResource:@"index" withExtension:@"html" subdirectory:@"Chart"];

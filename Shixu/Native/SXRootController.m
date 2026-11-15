@@ -47,7 +47,8 @@
  if([[SXStore sharedStore] hasPersonalData]||[NSUserDefaults.standardUserDefaults boolForKey:@"native-migration-v1"]||[NSUserDefaults.standardUserDefaults boolForKey:@"native-migration-offered-v1"])return;
  dispatch_async(dispatch_get_main_queue(), ^{
   if(self.presentedViewController)return;
-  UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"歡迎使用拾序 2.0" message:@"首頁、研究與持股已換成原生介面。舊版紀錄仍保留，可到設定預覽，再確認複製到目前工作區。" preferredStyle:UIAlertControllerStyleAlert];
+  NSString *version=NSBundle.mainBundle.infoDictionary[@"CFBundleShortVersionString"]?:@"";
+  UIAlertController *alert=[UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"歡迎使用拾序 %@",version] message:@"首頁、研究與持股已換成原生介面。舊版紀錄仍保留，可到設定預覽，再確認複製到目前工作區。" preferredStyle:UIAlertControllerStyleAlert];
   [alert addAction:[UIAlertAction actionWithTitle:@"開始使用" style:UIAlertActionStyleCancel handler:nil]];
   [alert addAction:[UIAlertAction actionWithTitle:@"前往移轉" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){self.selectedIndex=4;}]];
   [self presentViewController:alert animated:YES completion:^{[NSUserDefaults.standardUserDefaults setBool:YES forKey:@"native-migration-offered-v1"];}];

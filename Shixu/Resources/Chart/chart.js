@@ -3,15 +3,17 @@
   let chart,series=[],primary,rows=[],payload={},period='',stateTimer;
   const send=(type,value)=>globalThis.webkit?.messageHandlers?.chartEvent?.postMessage({type,...value});
   const format=n=>Number.isFinite(n)?n.toLocaleString('en-US',{maximumFractionDigits:2}):'—';
-  function emitState(){if(!chart)return;const range=chart.timeScale().getVisibleLogicalRange();send('state',{bars:rows.length,period,ma:payload.averages||[],visibleFrom:range?.from??0,visibleTo:range?.to??0});}
+  const validRange=range=>range&&Number.isFinite(range.from)&&Number.isFinite(range.to)&&range.to>range.from;
+  function emitState(){if(!chart)return;const range=chart.timeScale().getVisibleLogicalRange(),canvas=root.querySelector('canvas');send('state',{bars:rows.length,period,ma:payload.averages||[],visibleFrom:range?.from??0,visibleTo:range?.to??0,plotWidth:root.clientWidth,plotHeight:root.clientHeight,canvasWidth:canvas?.width??0,canvasHeight:canvas?.height??0});}
+  function resize(){if(!chart||root.clientWidth<1||root.clientHeight<1)return;chart.resize(root.clientWidth,root.clientHeight,true);if(rows.length&&!validRange(chart.timeScale().getVisibleLogicalRange()))reset();emitState();}
   function readout(event){const row=event?.time?rows.find(row=>row.time===event.time):rows.at(-1);if(!row)return;const text=[row.time,`開 ${format(row.open)}`,`高 ${format(row.high)}`,`低 ${format(row.low)}`,`收 ${format(row.close)}`,`量 ${format(row.volume)}`];for(const n of payload.averages||[]){const value=series.find(s=>s.period===n)?.data.get(row.time);if(Number.isFinite(value))text.push(`MA${n} ${format(value)}`);}send('readout',{text:text.join('  ')});}
   function create(dark){
-    chart=L.createChart(root,{autoSize:true,layout:{background:{type:'solid',color:dark?'#16201d':'#ffffff'},textColor:dark?'#b9c8bf':'#63776c',fontFamily:'-apple-system, sans-serif',fontSize:11,attributionLogo:true},grid:{vertLines:{color:dark?'#24342c':'#edf2ee'},horzLines:{color:dark?'#24342c':'#edf2ee'}},rightPriceScale:{borderVisible:false,scaleMargins:{top:.08,bottom:.25}},timeScale:{borderVisible:false,rightOffset:3,barSpacing:7},crosshair:{mode:0},handleScroll:{mouseWheel:true,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:false},handleScale:{pinch:true,mouseWheel:true,axisPressedMouseMove:true},localization:{locale:'zh-TW',timeFormatter:t=>typeof t==='string'?t:`${t.year}-${String(t.month).padStart(2,'0')}-${String(t.day).padStart(2,'0')}`},trackingMode:{exitMode:L.TrackingModeExitMode.OnNextTap}});
+    chart=L.createChart(root,{autoSize:false,width:Math.max(1,root.clientWidth),height:Math.max(1,root.clientHeight),layout:{background:{type:'solid',color:dark?'#16201d':'#ffffff'},textColor:dark?'#b9c8bf':'#63776c',fontFamily:'-apple-system, sans-serif',fontSize:11,attributionLogo:true},grid:{vertLines:{color:dark?'#24342c':'#edf2ee'},horzLines:{color:dark?'#24342c':'#edf2ee'}},rightPriceScale:{borderVisible:false,scaleMargins:{top:.08,bottom:.25}},timeScale:{borderVisible:false,rightOffset:3,barSpacing:7},crosshair:{mode:0},handleScroll:{mouseWheel:true,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:false},handleScale:{pinch:true,mouseWheel:true,axisPressedMouseMove:true},localization:{locale:'zh-TW',timeFormatter:t=>typeof t==='string'?t:`${t.year}-${String(t.month).padStart(2,'0')}-${String(t.day).padStart(2,'0')}`},trackingMode:{exitMode:L.TrackingModeExitMode.OnNextTap}});
     chart.subscribeCrosshairMove(readout);chart.timeScale().subscribeVisibleLogicalRangeChange(()=>{clearTimeout(stateTimer);stateTimer=setTimeout(emitState,60);});
   }
   function render(p){
     const changedPeriod=period!==(p.period||'day'),darkChanged=payload.dark!==p.dark;
-    const saved=chart?.timeScale().getVisibleLogicalRange();payload=p;period=p.period||'day';
+    const range=chart?.timeScale().getVisibleLogicalRange(),saved=rows.length&&validRange(range)&&range.to>=0&&range.from<rows.length?range:null;payload=p;period=p.period||'day';
     if(!chart||darkChanged){chart?.remove();create(p.dark);series=[];}
     for(const entry of series)chart.removeSeries(entry.line);series=[];
     rows=C.rows(p.rows);if(period==='week')rows=C.weekly(rows);
@@ -30,6 +32,7 @@
     readout();emitState();
   }
   function reset(){if(!chart||!rows.length)return;if(payload.visible>0)chart.timeScale().setVisibleLogicalRange({from:Math.max(-1,rows.length-payload.visible-1),to:rows.length+2});else chart.timeScale().fitContent();emitState();}
-  globalThis.SXChart={render,reset,range(count){payload.visible=count;reset();}};
+  globalThis.SXChart={render,reset,resize,range(count){payload.visible=count;reset();}};
+  new ResizeObserver(()=>requestAnimationFrame(resize)).observe(root);
   send('ready',{});
 })();

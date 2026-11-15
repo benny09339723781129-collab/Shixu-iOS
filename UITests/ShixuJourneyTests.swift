@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 /// Real UI journeys. Every launch is isolated by --ui-fixtures; no test taps
 /// research.start, signs in, restores data, removes a record, or contacts live APIs.
@@ -123,12 +124,37 @@ final class ShixuJourneyTests: XCTestCase {
         return last - first
     }
 
+    private func paintedCandlePixels() -> Int {
+        guard let image = element("chart.plot").screenshot().image.cgImage else { return 0 }
+        let width = 100, height = 100
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: width, height: height,
+                bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return 0 }
+        return stride(from: 0, to: pixels.count, by: 4).filter {
+            let red = Int(pixels[$0]), green = Int(pixels[$0 + 1]), blue = Int(pixels[$0 + 2])
+            return abs(red - green) > 25 && max(red, green) - blue > 15
+        }.count
+    }
+
     private func openAMD() {
         tapTab("行情")
         require("stock.AMD").tap()
         _ = require("chart.plot")
         waitUntil("Chart never exposed a nonempty data/viewport state") {
             (self.chartNumber("bars") ?? 0) > 0 && (self.chartWidth() ?? 0) > 0
+        }
+        waitUntil("Chart root/canvas never acquired a usable drawing size") {
+            (self.chartNumber("plotWidth") ?? 0) > 100 && (self.chartNumber("plotHeight") ?? 0) > 150 &&
+            (self.chartNumber("canvasWidth") ?? 0) > 100 && (self.chartNumber("canvasHeight") ?? 0) > 150
+        }
+        waitUntil("The chart reports data but its actual screenshot has no painted candles") {
+            self.paintedCandlePixels() > 30
         }
     }
 
@@ -252,6 +278,11 @@ final class ShixuJourneyTests: XCTestCase {
     func test05NewsScopesAndCalendarUseVisibleControls() {
         launch()
         tapTab("情報")
+        let scope = require("news.scope")
+        for title in ["自選", "市場", "日曆"] {
+            let button = scope.buttons[title]
+            XCTAssertTrue(button.isHittable && app.frame.contains(button.frame), "News scope is outside the visible screen: \(title)")
+        }
         choose("news.scope", ["自選"])
         saveScreenshot("05-news-watch-scope")
         choose("news.scope", ["市場"])

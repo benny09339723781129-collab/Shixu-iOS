@@ -88,7 +88,7 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 4; }
 - (NSInteger)logicalSection:(NSInteger)section {return [@[@0,@2,@1,@3][section] integerValue];}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    section=[self logicalSection:section];if (section == 0) return 4; if (section == 1) return self.signedIn ? 6 : 3; if (section == 2) return 4; return 2;
+    section=[self logicalSection:section];if (section == 0) return 4; if (section == 1) return self.signedIn ? 6 : 3; if (section == 2) return 4; return 3;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     section=[self logicalSection:section];
@@ -151,10 +151,16 @@ static NSDictionary *SXSettingsDictionary(id value) { return [value isKindOfClas
         NSDictionary *info = NSBundle.mainBundle.infoDictionary; NSString *version = SXSettingsText(info[@"CFBundleShortVersionString"]), *build = SXSettingsText(info[@"CFBundleVersion"]);
         return [self detailCell:@"拾序 iOS 原生版" detail:[NSString stringWithFormat:@"版本 %@（%@）", version.length ? version : @"—", build.length ? build : @"—"] symbol:@"info.circle" disclosure:NO];
     }
+    if(row==2)return [self detailCell:@"圖表與開源授權" detail:@"TradingView Lightweight Charts 5.2.1" symbol:@"doc.text" disclosure:YES];
     return [self detailCell:@"本機紀錄" detail:[NSString stringWithFormat:@"自選 %lu 檔 · 研究 %lu 份 · 持股 %lu 筆", (unsigned long)self.store.watchCodes.count, (unsigned long)self.store.runs.count, (unsigned long)([self.store.account[@"positions"] isKindOfClass:NSArray.class] ? [self.store.account[@"positions"] count] : 0)] symbol:@"externaldrive" disclosure:NO];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];if(indexPath.section!=0)return;if(indexPath.row==0){[self pickTheme];return;}if(indexPath.row==1){[self pickPreference:@"up" title:@"漲跌顏色" items:@[@[@"green",@"綠漲紅跌"],@[@"red",@"紅漲綠跌"]]];return;}if(indexPath.row==2){[self pickPreference:@"market" title:@"預設市場" items:@[@[@"US",@"美股"],@[@"TW",@"台股"]]];return;}[self pickPreference:@"reduceMotion" title:@"減少動態" items:@[@[@NO,@"跟隨系統"],@[@YES,@"減少動態"]]];
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];if(indexPath.section==3&&indexPath.row==2){[self showChartLicense];return;}if(indexPath.section!=0)return;if(indexPath.row==0){[self pickTheme];return;}if(indexPath.row==1){[self pickPreference:@"up" title:@"漲跌顏色" items:@[@[@"green",@"綠漲紅跌"],@[@"red",@"紅漲綠跌"]]];return;}if(indexPath.row==2){[self pickPreference:@"market" title:@"預設市場" items:@[@[@"US",@"美股"],@[@"TW",@"台股"]]];return;}[self pickPreference:@"reduceMotion" title:@"減少動態" items:@[@[@NO,@"跟隨系統"],@[@YES,@"減少動態"]]];
+}
+- (void)showChartLicense {
+    UIViewController *controller=[UIViewController new];controller.title=@"圖表與開源授權";controller.view.backgroundColor=UIColor.systemBackgroundColor;
+    UITextView *text=[UITextView new];text.editable=NO;text.selectable=YES;text.dataDetectorTypes=UIDataDetectorTypeLink;text.font=[UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];text.adjustsFontForContentSizeCategory=YES;text.textColor=UIColor.labelColor;text.backgroundColor=UIColor.clearColor;text.textContainerInset=UIEdgeInsetsMake(20,16,20,16);NSMutableString *content=[NSMutableString stringWithString:@"TradingView Lightweight Charts 5.2.1\nhttps://www.tradingview.com/\n\n"];
+    for(NSString *name in @[@"NOTICE",@"LICENSE"]){NSURL *url=[NSBundle.mainBundle URLForResource:name withExtension:@"txt" subdirectory:@"Chart"];NSString *part=url?[NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil]:nil;if(part.length)[content appendFormat:@"%@\n\n",part];}text.text=content;text.translatesAutoresizingMaskIntoConstraints=NO;[controller.view addSubview:text];[NSLayoutConstraint activateConstraints:@[[text.leadingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.leadingAnchor],[text.trailingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.trailingAnchor],[text.topAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.topAnchor],[text.bottomAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.bottomAnchor]]];[self.navigationController pushViewController:controller animated:YES];
 }
 - (void)pickTheme {
     UIAlertController *sheet = [UIAlertController alertControllerWithTitle:@"外觀模式" message:@"選擇 iOS 系統外觀。" preferredStyle:UIAlertControllerStyleActionSheet];
