@@ -1,4 +1,5 @@
 #import "SXStore.h"
+#import "SXMarketData.h"
 #import "SXAPI.h"
 #import <math.h>
 #import <CommonCrypto/CommonDigest.h>
@@ -106,7 +107,7 @@ static BOOL ValidValues(id values){
 - (void)refreshQuotesForCodes:(NSArray *)codes completion:(void (^)(void))completion {
  NSMutableArray *pending=[NSMutableArray new];for(NSString *code in [NSOrderedSet orderedSetWithArray:codes])if([self stockForCode:code]&&![self.loadingCodes containsObject:code]){[pending addObject:code];[self.loadingCodes addObject:code];}
  if(!pending.count){if(completion)completion();return;}__block NSUInteger remaining=pending.count;
- for(NSString *code in pending){NSString *path=[@"/api/quote?symbol=" stringByAppendingString:[[self sourceSymbolForCode:code] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet]];[[SXAPI sharedAPI] requestPath:path method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){NSString *currency=[[self stockForCode:code][@"market"] isEqual:@"TW"]?@"TWD":@"USD";if(!error&&[json isKindOfClass:NSDictionary.class]&&Finite(json[@"price"])&&[json[@"price"] doubleValue]>0&&[json[@"currency"] isEqual:currency]){self.quoteValues[code]=json;[self.quoteFailures removeObject:code];}else [self.quoteFailures addObject:code];[self.loadingCodes removeObject:code];[NSNotificationCenter.defaultCenter postNotificationName:SXQuotesDidChangeNotification object:self];if(--remaining==0&&completion)completion();}];}
+ for(NSString *code in pending){[[SXMarketData shared] quoteForCode:code completion:^(NSDictionary *json,NSError *error){NSString *currency=[[self stockForCode:code][@"market"] isEqual:@"TW"]?@"TWD":@"USD";if(!error&&[json isKindOfClass:NSDictionary.class]&&Finite(json[@"price"])&&[json[@"price"] doubleValue]>0&&[json[@"currency"] isEqual:currency]){self.quoteValues[code]=json;[self.quoteFailures removeObject:code];}else [self.quoteFailures addObject:code];[self.loadingCodes removeObject:code];[NSNotificationCenter.defaultCenter postNotificationName:SXQuotesDidChangeNotification object:self];if(--remaining==0&&completion)completion();}];}
 }
 - (NSData *)exportProfileData:(NSError **)error {return [NSJSONSerialization dataWithJSONObject:@{@"version":@1,@"values":self.values} options:NSJSONWritingSortedKeys error:error];}
 - (BOOL)importProfile:(NSDictionary *)profile replace:(BOOL)replace error:(NSError **)error {

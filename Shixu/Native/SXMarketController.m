@@ -2,99 +2,278 @@
 #import "SXStore.h"
 #import "SXAPI.h"
 #import "SXUI.h"
+#import "SXMarketData.h"
+#import "SXTradingChart.h"
 #import "SXResearchController.h"
 #import <SafariServices/SafariServices.h>
-#import <math.h>
 
-@interface SXChartView:UIView
-@property(nonatomic,strong) NSArray *rows;
-@property(nonatomic,strong) UILabel *readout;
-@property(nonatomic) NSInteger selected;
+static double MarketChange(NSDictionary *quote){return SXFiniteNumber(quote[@"changePercent"])?[quote[@"changePercent"] doubleValue]:0;}
+static UILabel *MarketLabel(NSString *text,UIFontTextStyle style,UIColor *color) {
+    UILabel *label=[UILabel new];label.text=text;label.font=[UIFont preferredFontForTextStyle:style];label.textColor=color;label.adjustsFontForContentSizeCategory=YES;label.numberOfLines=0;return label;
+}
+static UIStackView *MarketStack(NSArray *views,UILayoutConstraintAxis axis,CGFloat spacing) {
+    UIStackView *stack=[[UIStackView alloc] initWithArrangedSubviews:views];stack.axis=axis;stack.spacing=spacing;return stack;
+}
+static void MarketPin(UIView *child,UIView *parent,CGFloat inset) {
+    child.translatesAutoresizingMaskIntoConstraints=NO;[parent addSubview:child];[NSLayoutConstraint activateConstraints:@[[child.leadingAnchor constraintEqualToAnchor:parent.leadingAnchor constant:inset],[child.trailingAnchor constraintEqualToAnchor:parent.trailingAnchor constant:-inset],[child.topAnchor constraintEqualToAnchor:parent.topAnchor constant:inset],[child.bottomAnchor constraintEqualToAnchor:parent.bottomAnchor constant:-inset]]];
+}
+
+@interface SXMarketController () <UISearchResultsUpdating>
+@property(nonatomic,strong) UISegmentedControl *marketControl;
+@property(nonatomic,strong) UISearchController *search;
+@property(nonatomic,strong) NSArray *visibleStocks;
+@property(nonatomic,strong) NSArray *benchmarks;
+@property(nonatomic,strong) UIView *dashboard;
 @end
-@implementation SXChartView
-- (instancetype)initWithFrame:(CGRect)frame {if((self=[super initWithFrame:frame])){self.backgroundColor=UIColor.secondarySystemGroupedBackgroundColor;self.selected=-1;self.isAccessibilityElement=YES;self.accessibilityLabel=@"價格圖表";[self addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(inspect:)]];self.readout=[UILabel new];self.readout.font=[UIFont preferredFontForTextStyle:UIFontTextStyleCaption1];self.readout.numberOfLines=2;self.readout.textAlignment=NSTextAlignmentCenter;[self addSubview:self.readout];}return self;}
-- (void)layoutSubviews {[super layoutSubviews];self.readout.frame=CGRectMake(8,2,self.bounds.size.width-16,40);}
-- (void)setRows:(NSArray *)rows {_rows=rows;self.selected=-1;self.accessibilityValue=rows.count?[NSString stringWithFormat:@"%lu 筆正式價格；最後收盤 %@。長按查看各日價位。",(unsigned long)rows.count,SXFormatNumber([rows.lastObject objectForKey:@"close"],2)]:@"行情資料暫缺";self.readout.text=rows.count?@"長按查看日期與開高低收":@"沒有可繪製的正式行情";[self setNeedsDisplay];}
-- (void)inspect:(UILongPressGestureRecognizer *)gesture {if(!self.rows.count)return;CGFloat fraction=([gesture locationInView:self].x-12)/MAX(1,self.bounds.size.width-24);NSInteger index=MAX(0,MIN((NSInteger)self.rows.count-1,(NSInteger)floor(fraction*self.rows.count)));self.selected=index;NSDictionary *row=self.rows[index];self.readout.text=[NSString stringWithFormat:@"%@  開 %@  高 %@\n低 %@  收 %@",row[@"time"]?:row[@"date"]?:@"",SXFormatNumber(row[@"open"],2),SXFormatNumber(row[@"high"],2),SXFormatNumber(row[@"low"],2),SXFormatNumber(row[@"close"],2)];[self setNeedsDisplay];}
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {[super traitCollectionDidChange:previousTraitCollection];[self setNeedsDisplay];}
-- (void)drawRect:(CGRect)rect {
- if(!self.rows.count)return;CGFloat width=self.bounds.size.width-24,height=self.bounds.size.height-70;double low=DBL_MAX,high=-DBL_MAX;for(NSDictionary *row in self.rows){low=MIN(low,[row[@"low"] doubleValue]);high=MAX(high,[row[@"high"] doubleValue]);}if(!isfinite(low)||!isfinite(high)||high<=0)return;double spread=MAX(high-low,high*.015);low-=spread*.05;high+=spread*.05;CGFloat (^y)(double)=^CGFloat(double value){return 48+(high-value)/(high-low)*height;};CGFloat step=width/self.rows.count;
- [UIColor.separatorColor setStroke];for(int i=0;i<4;i++){UIBezierPath *grid=[UIBezierPath bezierPath];CGFloat gy=48+height*i/3;[grid moveToPoint:CGPointMake(12,gy)];[grid addLineToPoint:CGPointMake(width+12,gy)];grid.lineWidth=.5;[grid stroke];}
- for(NSUInteger i=0;i<self.rows.count;i++){NSDictionary *row=self.rows[i];double open=[row[@"open"] doubleValue],close=[row[@"close"] doubleValue];UIColor *color=close>=open?UIColor.systemGreenColor:UIColor.systemRedColor;[color setStroke];[color setFill];CGFloat x=12+(i+.5)*step;UIBezierPath *wick=[UIBezierPath bezierPath];[wick moveToPoint:CGPointMake(x,y([row[@"high"] doubleValue]))];[wick addLineToPoint:CGPointMake(x,y([row[@"low"] doubleValue]))];wick.lineWidth=1;[wick stroke];CGRect body=CGRectMake(x-MAX(1,step*.30),MIN(y(open),y(close)),MAX(2,step*.60),MAX(1,fabs(y(open)-y(close))));[[UIBezierPath bezierPathWithRect:body] fill];}
- for(NSNumber *period in @[@5,@20]){NSUInteger n=period.unsignedIntegerValue;double sum=0;UIBezierPath *average=[UIBezierPath bezierPath];BOOL started=NO;for(NSUInteger i=0;i<self.rows.count;i++){sum+=[self.rows[i][@"close"] doubleValue];if(i>=n)sum-=[self.rows[i-n][@"close"] doubleValue];if(i+1<n)continue;CGPoint point=CGPointMake(12+(i+.5)*step,y(sum/n));if(!started){[average moveToPoint:point];started=YES;}else [average addLineToPoint:point];}[(n==5?UIColor.systemOrangeColor:UIColor.systemBlueColor) setStroke];average.lineWidth=1.4;[average stroke];}
- if(self.selected>=0){[UIColor.secondaryLabelColor setStroke];UIBezierPath *line=[UIBezierPath bezierPath];CGFloat x=12+(self.selected+.5)*step;[line moveToPoint:CGPointMake(x,45)];[line addLineToPoint:CGPointMake(x,height+48)];[line stroke];}
+@implementation SXMarketController
+- (instancetype)init {return [super initWithStyle:UITableViewStyleInsetGrouped];}
+- (void)viewDidLoad {
+    [super viewDidLoad];self.title=@"拾序";self.tableView.backgroundColor=UIColor.systemGroupedBackgroundColor;self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=68;
+    self.search=[[UISearchController alloc] initWithSearchResultsController:nil];self.search.searchResultsUpdater=self;self.search.obscuresBackgroundDuringPresentation=NO;self.search.searchBar.placeholder=@"搜尋股票代號或公司";self.search.searchBar.accessibilityIdentifier=@"market.search";self.search.searchBar.searchTextField.accessibilityIdentifier=@"market.search";self.search.searchBar.autocorrectionType=UITextAutocorrectionTypeNo;self.navigationItem.searchController=self.search;self.navigationItem.hidesSearchBarWhenScrolling=NO;self.definesPresentationContext=YES;
+    self.marketControl=[[UISegmentedControl alloc] initWithItems:@[@"美股",@"台股"]];self.marketControl.accessibilityIdentifier=@"market.scope";self.marketControl.selectedSegmentIndex=[[SXStore.sharedStore setting:@"market" fallback:@"US"] isEqual:@"TW"]?1:0;[self.marketControl addTarget:self action:@selector(marketChanged) forControlEvents:UIControlEventValueChanged];
+    __weak typeof(self) weak=self;UIButton *add=SXIconButton(@"建立研究",@"sparkles",[UIAction actionWithHandler:^(__kindof UIAction *a){weak.tabBarController.selectedIndex=2;[(SXResearchController *)((UINavigationController *)weak.tabBarController.selectedViewController).viewControllers.firstObject openSetupForCode:@"AMD"];}]);
+    self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithCustomView:add];
+    self.refreshControl=[UIRefreshControl new];[self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(rebuild) name:SXStoreDidChangeNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(quotesChanged) name:SXQuotesDidChangeNotification object:nil];[self rebuild];[self refresh];
+}
+- (void)dealloc {[NSNotificationCenter.defaultCenter removeObserver:self];}
+- (void)viewWillAppear:(BOOL)animated {[super viewWillAppear:animated];[self rebuild];}
+- (void)marketChanged {[SXStore.sharedStore setSetting:self.marketControl.selectedSegmentIndex?@"TW":@"US" forKey:@"market"];SXTransition(self.tableView,^{[self rebuild];});[self refresh];}
+- (void)updateSearchResultsForSearchController:(UISearchController *)searchController {[self rebuild];if(searchController.searchBar.text.length)[self refresh];}
+- (void)rebuild {
+    BOOL tw=self.marketControl.selectedSegmentIndex==1;NSString *query=[self.search.searchBar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].uppercaseString;
+    self.benchmarks=tw?@[@"0050",@"006208",@"00878",@"0056"]:@[@"SPY",@"QQQ",@"DIA",@"SOXX"];
+    NSMutableArray *stocks=[NSMutableArray new];
+    if(query.length) {for(NSDictionary *stock in SXStore.sharedStore.directory)if([stock[@"market"] isEqual:tw?@"TW":@"US"]&&([[stock[@"code"] uppercaseString] containsString:query]||[[stock[@"name"] uppercaseString] containsString:query]||[[stock[@"alias"] uppercaseString] containsString:query])){[stocks addObject:stock];if(stocks.count>=40)break;}}
+    else for(NSString *code in SXStore.sharedStore.watchCodes){NSDictionary *stock=[SXStore.sharedStore stockForCode:code];if([stock[@"market"] isEqual:tw?@"TW":@"US"])[stocks addObject:stock];}
+    self.visibleStocks=stocks;[self buildDashboard];[UIView performWithoutAnimation:^{[self.tableView reloadData];}];
+}
+- (void)quotesChanged {[self buildDashboard];[UIView performWithoutAnimation:^{[self.tableView reloadData];}];}
+- (void)refresh {
+    NSMutableOrderedSet *codes=[NSMutableOrderedSet orderedSetWithArray:self.benchmarks?:@[]];for(NSDictionary *stock in self.visibleStocks)if(codes.count<20)[codes addObject:stock[@"code"]];
+    [SXStore.sharedStore refreshQuotesForCodes:codes.array completion:^{[self.refreshControl endRefreshing];}];
+}
+- (void)openAssets:(UIButton *)sender {NSString *currency=sender.tag?@"TWD":@"USD";if([SXStore.sharedStore setProfileValue:currency forKey:@"account.currency"])self.tabBarController.selectedIndex=3;}
+- (UIButton *)assetButton:(NSString *)currency {
+    SXStore *store=SXStore.sharedStore;double cash=0,value=0;BOOL complete=YES;
+    for(NSDictionary *row in store.account[@"cash"])if([row[@"currency"] isEqual:currency])cash+=[row[@"amount"] doubleValue];
+    for(NSDictionary *row in store.account[@"positions"])if([row[@"currency"] isEqual:currency]){NSDictionary *quote=store.quotes[row[@"code"]];if(SXFiniteNumber(quote[@"price"])&&[quote[@"currency"] isEqual:currency])value+=[quote[@"price"] doubleValue]*[row[@"quantity"] doubleValue];else complete=NO;}
+    NSString *text=[NSString stringWithFormat:@"%@ 資產  %@",currency,complete?SXMoney(@(cash+value),currency):@"等待報價"];__weak typeof(self) weak=self;UIButton *button=SXGlassButton(text,nil,[UIAction actionWithHandler:^(__kindof UIAction *action){[weak openAssets:(UIButton *)action.sender];}]);button.tag=[currency isEqual:@"TWD"]?1:0;button.accessibilityIdentifier=[@"assets." stringByAppendingString:currency];return button;
+}
+- (void)buildDashboard {
+    if(!self.isViewLoaded)return;
+    BOOL searching=self.search.searchBar.text.length>0;CGFloat width=MAX(300,self.tableView.bounds.size.width);
+    UIView *header=[[UIView alloc] initWithFrame:CGRectMake(0,0,width,searching?52:322)];self.marketControl.translatesAutoresizingMaskIntoConstraints=NO;[self.marketControl removeFromSuperview];[header addSubview:self.marketControl];
+    [NSLayoutConstraint activateConstraints:@[[self.marketControl.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:20],[self.marketControl.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-20],[self.marketControl.topAnchor constraintEqualToAnchor:header.topAnchor constant:6],[self.marketControl.heightAnchor constraintEqualToConstant:32]]];
+    if(!searching){
+        UILabel *caption=MarketLabel(@"市場概況",UIFontTextStyleFootnote,UIColor.secondaryLabelColor);caption.frame=CGRectMake(24,52,width-48,20);[header addSubview:caption];
+        UIView *grid=[[UIView alloc] initWithFrame:CGRectMake(20,80,width-40,164)];grid.accessibilityIdentifier=@"market.benchmarks";grid.shouldGroupAccessibilityChildren=YES;[header addSubview:grid];
+        for(NSUInteger index=0;index<self.benchmarks.count;index++){
+            NSString *code=self.benchmarks[index];NSDictionary *stock=[SXStore.sharedStore stockForCode:code],*quote=SXStore.sharedStore.quotes[code];__weak typeof(self) weak=self;
+            UIButton *card=SXGlassButton(@"",nil,[UIAction actionWithHandler:^(__kindof UIAction *action){[weak openCode:code];}]);card.frame=CGRectMake((index%2)*((width-50)/2+10),(index/2)*86,(width-50)/2,78);card.autoresizingMask=UIViewAutoresizingFlexibleWidth;UIButtonConfiguration *config=card.configuration;config.contentInsets=NSDirectionalEdgeInsetsZero;card.configuration=config;
+            UILabel *name=MarketLabel(code,UIFontTextStyleCaption1,UIColor.secondaryLabelColor);name.numberOfLines=1;
+            UILabel *price=MarketLabel(SXFormatNumber(quote[@"price"],2),UIFontTextStyleHeadline,UIColor.labelColor);price.numberOfLines=1;price.adjustsFontSizeToFitWidth=YES;
+            UILabel *delta=MarketLabel(SXQuoteDelta(quote),UIFontTextStyleCaption1,SXChangeColor(MarketChange(quote)));delta.numberOfLines=1;
+            UIStackView *stack=MarketStack(@[name,price,delta],UILayoutConstraintAxisVertical,1);stack.userInteractionEnabled=NO;MarketPin(stack,card,10);
+            card.accessibilityLabel=[NSString stringWithFormat:@"%@ %@ %@ %@",code,stock[@"alias"]?:stock[@"name"]?:@"",price.text,delta.text];[grid addSubview:card];
+        }
+        UIStackView *assets=MarketStack(@[[self assetButton:@"USD"],[self assetButton:@"TWD"]],UILayoutConstraintAxisHorizontal,8);assets.distribution=UIStackViewDistributionFillEqually;assets.frame=CGRectMake(20,257,width-40,48);assets.autoresizingMask=UIViewAutoresizingFlexibleWidth;[header addSubview:assets];
+    }
+    self.dashboard=header;self.tableView.tableHeaderView=header;
+}
+- (void)viewDidLayoutSubviews {[super viewDidLayoutSubviews];if(fabs(self.dashboard.bounds.size.width-self.tableView.bounds.size.width)>1)[self buildDashboard];}
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {return 1;}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {return MAX(1,self.visibleStocks.count);}
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+    UILabel *label=MarketLabel(self.search.searchBar.text.length?@"搜尋結果":@"自選看盤",UIFontTextStyleSubheadline,UIColor.secondaryLabelColor);label.accessibilityIdentifier=@"market.watchlist";UIView *view=[[UIView alloc] initWithFrame:CGRectMake(0,0,tableView.bounds.size.width,32)];MarketPin(label,view,5);return view;
+}
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {return 32;}
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {return self.search.searchBar.text.length?@"點股票看盤；點星號加入自選。":@"Nasdaq／TWSE／TPEx 公開行情 · 下拉更新。自選可向左滑動移除。";}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];cell.selectionStyle=UITableViewCellSelectionStyleDefault;
+    if(!self.visibleStocks.count){cell.textLabel.text=self.search.searchBar.text.length?@"找不到相符股票":@"搜尋股票，開始加入自選";cell.textLabel.textColor=UIColor.secondaryLabelColor;return cell;}
+    NSDictionary *stock=self.visibleStocks[indexPath.row];NSString *code=stock[@"code"];NSDictionary *quote=SXStore.sharedStore.quotes[code];
+    UILabel *symbol=MarketLabel(code,UIFontTextStyleHeadline,UIColor.labelColor),*name=MarketLabel(stock[@"alias"]?:stock[@"name"],UIFontTextStyleCaption1,UIColor.secondaryLabelColor);name.numberOfLines=1;name.lineBreakMode=NSLineBreakByTruncatingTail;
+    UILabel *price=MarketLabel(SXMoney(quote[@"price"],self.marketControl.selectedSegmentIndex?@"TWD":@"USD"),UIFontTextStyleHeadline,UIColor.labelColor),*delta=MarketLabel(SXQuoteDelta(quote),UIFontTextStyleSubheadline,SXChangeColor(MarketChange(quote)));price.textAlignment=delta.textAlignment=NSTextAlignmentRight;
+    UIStackView *left=MarketStack(@[symbol,name],UILayoutConstraintAxisVertical,4),*right=MarketStack(@[price,delta],UILayoutConstraintAxisVertical,4);[right setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];UIStackView *row=MarketStack(@[left,right],UILayoutConstraintAxisHorizontal,12);row.alignment=UIStackViewAlignmentCenter;MarketPin(row,cell.contentView,12);
+    cell.accessibilityIdentifier=[@"stock." stringByAppendingString:code];cell.accessibilityLabel=[NSString stringWithFormat:@"%@ %@ %@ %@",code,name.text,price.text,delta.text];cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;
+    if(self.search.searchBar.text.length){BOOL watched=[SXStore.sharedStore.watchCodes containsObject:code];UIButton *star=[UIButton buttonWithType:UIButtonTypeSystem];[star setImage:[UIImage systemImageNamed:watched?@"star.fill":@"star"] forState:UIControlStateNormal];star.frame=CGRectMake(0,0,44,44);star.accessibilityLabel=[NSString stringWithFormat:@"%@自選 %@",watched?@"移除":@"加入",code];[star addAction:[UIAction actionWithHandler:^(__kindof UIAction *action){NSMutableArray *codes=[SXStore.sharedStore.watchCodes mutableCopy];if([codes containsObject:code])[codes removeObject:code];else[codes addObject:code];[SXStore.sharedStore setWatchCodes:codes];}] forControlEvents:UIControlEventTouchUpInside];cell.accessoryView=star;}
+    return cell;
+}
+- (void)openCode:(NSString *)code {[self.navigationController pushViewController:[[SXStockController alloc] initWithCode:code] animated:YES];}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {[tableView deselectRowAtIndexPath:indexPath animated:YES];if(self.visibleStocks.count)[self openCode:self.visibleStocks[indexPath.row][@"code"]];}
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if(self.search.searchBar.text.length||!self.visibleStocks.count)return nil;NSString *code=self.visibleStocks[indexPath.row][@"code"];
+    UIContextualAction *remove=[UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"移除自選" handler:^(__kindof UIContextualAction *action,UIView *view,void (^done)(BOOL)){NSMutableArray *codes=[SXStore.sharedStore.watchCodes mutableCopy];[codes removeObject:code];[SXStore.sharedStore setWatchCodes:codes];done(YES);}];return [UISwipeActionsConfiguration configurationWithActions:@[remove]];
 }
 @end
 
-@interface SXNewsController:UITableViewController
-@property(nonatomic,strong) NSArray *items;
-@property(nonatomic,copy) NSString *message;
-@end
-@implementation SXNewsController
-- (instancetype)init {return [super initWithStyle:UITableViewStyleInsetGrouped];}
-- (void)viewDidLoad {[super viewDidLoad];self.title=@"市場情報";self.items=@[];self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=100;self.refreshControl=[UIRefreshControl new];[self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];[self refresh];}
-- (void)refresh {self.message=@"正在取得公開情報…";[self.tableView reloadData];[[SXAPI sharedAPI] requestPath:@"/api/news?symbol=MARKET" method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){[self.refreshControl endRefreshing];if(!error&&[json[@"items"] isKindOfClass:NSArray.class]){NSMutableArray *items=[NSMutableArray new];for(id item in json[@"items"])if([item isKindOfClass:NSDictionary.class]&&[item[@"titleZh"] isKindOfClass:NSString.class]&&[item[@"titleZh"] length])[items addObject:item];self.items=items;self.message=[json[@"stale"] boolValue]?@"來源更新暫停，顯示上次情報。":items.count?@"公開來源 · 點擊開啟原文":@"目前沒有可顯示的中文情報。";}else self.message=error.localizedDescription?:@"情報來源暫缺，下拉可重試。";[self.tableView reloadData];}];}
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{return MAX(1,self.items.count);}
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section{return self.message;}
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.textLabel.numberOfLines=0;cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];cell.detailTextLabel.numberOfLines=2;if(!self.items.count){cell.textLabel.text=self.message;return cell;}NSDictionary *item=self.items[indexPath.row];cell.textLabel.text=item[@"titleZh"];cell.detailTextLabel.text=[NSString stringWithFormat:@"%@ · %@",item[@"source"]?:@"公開來源",SXDateLabel(item[@"date"])];cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return cell;}
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{[tableView deselectRowAtIndexPath:indexPath animated:YES];if(!self.items.count)return;NSURL *url=[NSURL URLWithString:self.items[indexPath.row][@"url"]?:@""];if([@[@"https",@"http"] containsObject:url.scheme.lowercaseString])[self presentViewController:[[SFSafariViewController alloc] initWithURL:url] animated:YES completion:nil];}
-@end
-
-@interface SXMarketController ()<UISearchResultsUpdating>
-@property(nonatomic,strong) UISegmentedControl *marketControl;
-@property(nonatomic,strong) NSArray *visibleStocks;
-@property(nonatomic,strong) UISearchController *search;
-@end
-@implementation SXMarketController
-- (instancetype)init{return [super initWithStyle:UITableViewStyleInsetGrouped];}
-- (void)viewDidLoad {[super viewDidLoad];self.title=@"行情";self.visibleStocks=@[];self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=80;self.search=[[UISearchController alloc] initWithSearchResultsController:nil];self.search.searchResultsUpdater=self;self.search.obscuresBackgroundDuringPresentation=NO;self.search.searchBar.placeholder=@"代號或公司名稱";self.search.searchBar.autocorrectionType=UITextAutocorrectionTypeNo;self.navigationItem.searchController=self.search;self.definesPresentationContext=YES;self.marketControl=[[UISegmentedControl alloc] initWithItems:@[@"美股",@"台股"]];self.marketControl.selectedSegmentIndex=0;[self.marketControl addTarget:self action:@selector(rebuild) forControlEvents:UIControlEventValueChanged];self.navigationItem.titleView=self.marketControl;self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"newspaper"] style:UIBarButtonItemStylePlain target:self action:@selector(news)];self.navigationItem.rightBarButtonItem.accessibilityLabel=@"市場情報";self.refreshControl=[UIRefreshControl new];[self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(rebuild) name:SXStoreDidChangeNotification object:nil];[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(paint) name:SXQuotesDidChangeNotification object:nil];[self rebuild];}
-- (void)dealloc{[NSNotificationCenter.defaultCenter removeObserver:self];}
-- (void)viewWillAppear:(BOOL)animated{[super viewWillAppear:animated];[self rebuild];[self refresh];}
-- (void)paint{[self.tableView reloadData];}
-- (void)news{[self.navigationController pushViewController:[SXNewsController new] animated:YES];}
-- (void)updateSearchResultsForSearchController:(UISearchController *)searchController{[self rebuild];}
-- (void)rebuild {SXStore *store=[SXStore sharedStore];NSString *query=[self.search.searchBar.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]?:@"",*market=self.marketControl.selectedSegmentIndex==1?@"TW":@"US";NSMutableArray *rows=[NSMutableArray new];NSArray *codes=store.watchCodes.count?store.watchCodes:(self.marketControl.selectedSegmentIndex==1?@[@"2330",@"2317",@"0050",@"6488"]:@[@"SPY",@"QQQ",@"AMD",@"NVDA"]);if(query.length){for(NSDictionary *stock in store.directory){NSString *haystack=[NSString stringWithFormat:@"%@ %@ %@",stock[@"code"],stock[@"name"]?:@"",stock[@"alias"]?:@""];if([stock[@"market"] isEqual:market]&&[haystack rangeOfString:query options:NSCaseInsensitiveSearch|NSDiacriticInsensitiveSearch].location!=NSNotFound){[rows addObject:stock];if(rows.count>=60)break;}}}else{for(NSString *code in codes){NSDictionary *stock=[store stockForCode:code];if([stock[@"market"] isEqual:market])[rows addObject:stock];}}self.visibleStocks=rows;[self.tableView reloadData];if(!query.length)[self refresh];}
-- (void)refresh {NSArray *codes=[self.visibleStocks valueForKey:@"code"];[[SXStore sharedStore] refreshQuotesForCodes:codes completion:^{[self.refreshControl endRefreshing];}];}
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{return MAX(1,self.visibleStocks.count);}
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section{return self.search.searchBar.text.length?@"搜尋結果":[SXStore sharedStore].watchCodes.count?@"我的自選":@"市場起點";}
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section{return @"搜尋公司後點入查看原生 K 線、基本面與筆記；向右滑可加入或移出自選。";}
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];cell.detailTextLabel.numberOfLines=0;cell.textLabel.adjustsFontForContentSizeCategory=YES;cell.detailTextLabel.adjustsFontForContentSizeCategory=YES;if(!self.visibleStocks.count){cell.textLabel.text=@"沒有符合的股票";cell.detailTextLabel.text=@"換個代號或公司名稱，或切換市場。";return cell;}NSDictionary *stock=self.visibleStocks[indexPath.row],*quote=[SXStore sharedStore].quotes[stock[@"code"]];cell.textLabel.text=[NSString stringWithFormat:@"%@ · %@",stock[@"code"],stock[@"alias"]?:stock[@"name"]];cell.detailTextLabel.text=[NSString stringWithFormat:@"%@\n%@",SXMoney(quote[@"price"],[stock[@"market"] isEqual:@"TW"]?@"TWD":@"USD"),SXQuoteLabel(quote,[[SXStore sharedStore].quoteErrors containsObject:stock[@"code"]])];cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return cell;}
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{[tableView deselectRowAtIndexPath:indexPath animated:YES];if(self.visibleStocks.count)[self.navigationController pushViewController:[[SXStockController alloc] initWithCode:self.visibleStocks[indexPath.row][@"code"]] animated:YES];}
-- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView leadingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath{if(!self.visibleStocks.count)return nil;NSString *code=self.visibleStocks[indexPath.row][@"code"];BOOL exists=[[SXStore sharedStore].watchCodes containsObject:code];UIContextualAction *action=[UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:exists?@"移出自選":@"加入自選" handler:^(UIContextualAction *action,UIView *view,void(^done)(BOOL)){NSMutableArray *codes=[[SXStore sharedStore].watchCodes mutableCopy];if(exists)[codes removeObject:code];else [codes addObject:code];[[SXStore sharedStore] setWatchCodes:codes];done(YES);}];action.image=[UIImage systemImageNamed:exists?@"star.slash":@"star"];return [UISwipeActionsConfiguration configurationWithActions:@[action]];}
-@end
-
-@interface SXNoteController:UIViewController<UITextViewDelegate>
+@interface SXNoteController : UIViewController
 @property(nonatomic,copy) NSString *code;
 @property(nonatomic,strong) UITextView *text;
+@property(nonatomic,copy) NSString *workspace;
 @end
 @implementation SXNoteController
-- (void)viewDidLoad{[super viewDidLoad];self.title=@"研究筆記";self.view.backgroundColor=UIColor.systemBackgroundColor;self.text=[[UITextView alloc] initWithFrame:self.view.bounds];self.text.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;self.text.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];self.text.adjustsFontForContentSizeCategory=YES;self.text.textContainerInset=UIEdgeInsetsMake(20,16,30,16);self.text.delegate=self;self.text.text=[[SXStore sharedStore] valueForProfileKey:[@"note." stringByAppendingString:self.code] fallback:@""];[self.view addSubview:self.text];self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(done)];}
-- (void)textViewDidChange:(UITextView *)textView{BOOL saved=[[SXStore sharedStore] setProfileValue:textView.text?:@"" forKey:[@"note." stringByAppendingString:self.code]];self.navigationItem.prompt=saved?@"筆記已儲存於這部 iPhone":@"無法儲存，請先複製保留";}
-- (void)done{[self.text resignFirstResponder];[self.navigationController popViewControllerAnimated:YES];}
+- (void)viewDidLoad {
+    [super viewDidLoad];self.title=@"研究筆記";self.workspace=SXStore.sharedStore.activeProfileUserID;self.view.backgroundColor=UIColor.systemBackgroundColor;
+    self.text=[UITextView new];self.text.font=[UIFont preferredFontForTextStyle:UIFontTextStyleBody];self.text.adjustsFontForContentSizeCategory=YES;self.text.textContainerInset=UIEdgeInsetsMake(18,16,18,16);self.text.text=[SXStore.sharedStore valueForProfileKey:[@"note." stringByAppendingString:self.code] fallback:@""];self.text.accessibilityIdentifier=@"stock.note";
+    self.text.translatesAutoresizingMaskIntoConstraints=NO;[self.view addSubview:self.text];[NSLayoutConstraint activateConstraints:@[[self.text.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],[self.text.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],[self.text.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],[self.text.bottomAnchor constraintEqualToAnchor:self.view.keyboardLayoutGuide.topAnchor]]];
+    self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"儲存" style:UIBarButtonItemStyleDone target:self action:@selector(done)];
+}
+- (void)done {
+    if(![(self.workspace?:@"") isEqual:(SXStore.sharedStore.activeProfileUserID?:@"")]){SXShowError(self,@"工作區已變更",@"請重新開啟筆記。");return;}
+    if(![SXStore.sharedStore setProfileValue:self.text.text?:@"" forKey:[@"note." stringByAppendingString:self.code]]){SXShowError(self,@"無法儲存",SXStore.sharedStore.persistenceError?:@"請重試。");return;}[self.text resignFirstResponder];[self.navigationController popViewControllerAnimated:YES];
+}
+@end
+
+@interface SXChartFullscreenController : UIViewController
+@property(nonatomic,strong) SXTradingChart *chart;
+@property(nonatomic,copy) void (^closed)(void);
+@end
+@implementation SXChartFullscreenController
+- (void)viewDidLoad {[super viewDidLoad];self.title=@"TradingView 圖表";self.view.backgroundColor=UIColor.systemBackgroundColor;self.chart.translatesAutoresizingMaskIntoConstraints=NO;[self.chart removeFromSuperview];[self.view addSubview:self.chart];[NSLayoutConstraint activateConstraints:@[[self.chart.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor],[self.chart.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor],[self.chart.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],[self.chart.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor]]];self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:self action:@selector(done)];self.navigationItem.rightBarButtonItem.accessibilityIdentifier=@"chart.close";}
+- (void)done {[self.chart removeFromSuperview];[self dismissViewControllerAnimated:YES completion:self.closed];}
 @end
 
 @interface SXStockController ()
 @property(nonatomic,copy) NSString *code;
 @property(nonatomic,strong) NSArray *rows;
 @property(nonatomic,strong) NSArray *fields;
-@property(nonatomic,strong) NSDictionary *technicals;
-@property(nonatomic,strong) SXChartView *chart;
-@property(nonatomic,copy) NSString *message;
-@property(nonatomic) NSInteger range;
+@property(nonatomic,strong) NSString *source;
+@property(nonatomic,strong) NSString *message;
+@property(nonatomic,strong) SXTradingChart *chart;
+@property(nonatomic,strong) UILabel *readout;
+@property(nonatomic,strong) UISegmentedControl *periodControl;
+@property(nonatomic,strong) UISegmentedControl *rangeControl;
+@property(nonatomic,strong) UISegmentedControl *contentControl;
+@property(nonatomic,strong) UIView *quoteHeader;
 @end
 @implementation SXStockController
-- (instancetype)initWithCode:(NSString *)code{if((self=[super initWithStyle:UITableViewStyleInsetGrouped])){self.code=code;self.rows=@[];self.fields=@[];self.technicals=@{};self.range=66;}return self;}
-- (void)viewDidLoad{[super viewDidLoad];self.title=self.code;self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=70;self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithImage:[UIImage systemImageNamed:@"star"] style:UIBarButtonItemStylePlain target:self action:@selector(toggleWatch)];self.navigationItem.rightBarButtonItem.accessibilityLabel=@"加入或移出自選";self.refreshControl=[UIRefreshControl new];[self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];[NSNotificationCenter.defaultCenter addObserver:self selector:@selector(paint) name:SXQuotesDidChangeNotification object:nil];[self refresh];}
-- (void)dealloc{[NSNotificationCenter.defaultCenter removeObserver:self];}
-- (void)paint{self.navigationItem.rightBarButtonItem.image=[UIImage systemImageNamed:[[SXStore sharedStore].watchCodes containsObject:self.code]?@"star.fill":@"star"];[self.tableView reloadData];}
-- (void)toggleWatch{NSMutableArray *codes=[[SXStore sharedStore].watchCodes mutableCopy];if([codes containsObject:self.code])[codes removeObject:self.code];else [codes addObject:self.code];[[SXStore sharedStore] setWatchCodes:codes];[self paint];}
-- (void)refresh{[[SXStore sharedStore] refreshQuotesForCodes:@[self.code] completion:^{[self.refreshControl endRefreshing];}];NSString *symbol=[[[SXStore sharedStore] sourceSymbolForCode:self.code] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];[[SXAPI sharedAPI] requestPath:[NSString stringWithFormat:@"/api/chart?symbol=%@&interval=1d",symbol] method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){if(!error&&[json[@"rows"] isKindOfClass:NSArray.class]){NSMutableArray *rows=[NSMutableArray new];for(NSDictionary *row in json[@"rows"])if([row isKindOfClass:NSDictionary.class]&&SXFiniteNumber(row[@"open"])&&SXFiniteNumber(row[@"close"])&&SXFiniteNumber(row[@"high"])&&SXFiniteNumber(row[@"low"])&&[row[@"low"] doubleValue]>0&&[row[@"high"] doubleValue]>=MAX([row[@"open"] doubleValue],[row[@"close"] doubleValue])&&[row[@"low"] doubleValue]<=MIN([row[@"open"] doubleValue],[row[@"close"] doubleValue]))[rows addObject:row];self.rows=rows;self.message=[NSString stringWithFormat:@"%@ · MA5 橙 / MA20 藍",json[@"source"]?:@"公開日 K"];}else self.message=error.localizedDescription?:@"圖表資料暫缺";[self.tableView reloadData];}];[[SXAPI sharedAPI] requestPath:[NSString stringWithFormat:@"/api/fundamentals?symbol=%@",symbol] method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){self.fields=!error&&[json[@"fields"] isKindOfClass:NSArray.class]?json[@"fields"]:@[];[self.tableView reloadData];}];[[SXAPI sharedAPI] requestPath:[NSString stringWithFormat:@"/api/technical?symbol=%@",symbol] method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){self.technicals=!error&&[json[@"values"] isKindOfClass:NSDictionary.class]?json[@"values"]:@{};[self.tableView reloadData];}];}
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView{return 5;}
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section{return section==0?1:section==1?2:section==2?2:section==3?MAX(1,self.fields.count):MAX(1,self.technicals.count);}
-- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section{return @[@"目前報價",@"價格圖表",@"研究",@"基本面",@"技術指標"][section];}
-- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section{return section==1?self.message:section==3?@"沒有可驗證來源的欄位維持資料不足。":nil;}
-- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath{return indexPath.section==1&&indexPath.row==1?285:UITableViewAutomaticDimension;}
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath{UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.textLabel.numberOfLines=0;cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];cell.detailTextLabel.numberOfLines=0;cell.textLabel.adjustsFontForContentSizeCategory=YES;cell.detailTextLabel.adjustsFontForContentSizeCategory=YES;SXStore *store=[SXStore sharedStore];if(indexPath.section==0){NSDictionary *quote=store.quotes[self.code],*stock=[store stockForCode:self.code];cell.textLabel.text=SXMoney(quote[@"price"],[stock[@"market"] isEqual:@"TW"]?@"TWD":@"USD");cell.detailTextLabel.text=[NSString stringWithFormat:@"%@\n%@",stock[@"alias"]?:stock[@"name"]?:self.code,SXQuoteLabel(quote,[store.quoteErrors containsObject:self.code])];}else if(indexPath.section==1&&indexPath.row==0){UISegmentedControl *ranges=[[UISegmentedControl alloc] initWithItems:@[@"1 月",@"1 季",@"1 年"]];ranges.selectedSegmentIndex=self.range==22?0:self.range==66?1:2;[ranges addTarget:self action:@selector(rangeChanged:) forControlEvents:UIControlEventValueChanged];ranges.frame=CGRectInset(CGRectMake(0,0,tableView.bounds.size.width-40,55),12,8);ranges.autoresizingMask=UIViewAutoresizingFlexibleWidth;[cell.contentView addSubview:ranges];cell.selectionStyle=UITableViewCellSelectionStyleNone;}else if(indexPath.section==1){SXChartView *chart=[[SXChartView alloc] initWithFrame:CGRectMake(0,0,tableView.bounds.size.width-40,285)];chart.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;NSUInteger count=MIN(self.rows.count,(NSUInteger)self.range);chart.rows=[self.rows subarrayWithRange:NSMakeRange(self.rows.count-count,count)];[cell.contentView addSubview:chart];cell.selectionStyle=UITableViewCellSelectionStyleNone;}else if(indexPath.section==2){cell.textLabel.text=indexPath.row==0?@"建立 AI 研究":@"我的研究筆記";cell.imageView.image=[UIImage systemImageNamed:indexPath.row==0?@"sparkles":@"square.and.pencil"];cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;}else if(indexPath.section==3){if(self.fields.count){NSDictionary *field=self.fields[indexPath.row];cell.textLabel.text=[field[@"label"] description];cell.detailTextLabel.text=[field[@"value"] isKindOfClass:NSString.class]?field[@"value"]:@"資料不足";}else cell.textLabel.text=@"尚無可驗證基本面資料";}else{NSArray *keys=[self.technicals.allKeys sortedArrayUsingSelector:@selector(compare:)];if(keys.count){NSString *key=keys[indexPath.row];cell.textLabel.text=key;cell.detailTextLabel.text=SXFiniteNumber(self.technicals[key])?SXFormatNumber(self.technicals[key],2):@"資料不足";}else cell.textLabel.text=@"技術資料待更新";}return cell;}
-- (void)rangeChanged:(UISegmentedControl *)sender{self.range=[@[@22,@66,@252][sender.selectedSegmentIndex] integerValue];[self.tableView reloadSections:[NSIndexSet indexSetWithIndex:1] withRowAnimation:UITableViewRowAnimationNone];}
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath{[tableView deselectRowAtIndexPath:indexPath animated:YES];if(indexPath.section!=2)return;if(indexPath.row==1){SXNoteController *note=[SXNoteController new];note.code=self.code;[self.navigationController pushViewController:note animated:YES];}else{self.tabBarController.selectedIndex=2;UINavigationController *nav=self.tabBarController.selectedViewController;[(SXResearchController *)nav.viewControllers.firstObject openSetupForCode:self.code];}}
+- (instancetype)initWithCode:(NSString *)code {if((self=[super initWithStyle:UITableViewStyleInsetGrouped])){self.code=code;self.rows=@[];self.fields=@[];self.message=@"正在讀取交易所行情…";}return self;}
+- (void)viewDidLoad {
+    [super viewDidLoad];self.title=self.code;self.tableView.backgroundColor=UIColor.systemGroupedBackgroundColor;self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=70;
+    self.chart=[[SXTradingChart alloc] initWithFrame:CGRectZero];self.readout=MarketLabel(@"長按十字線看開高低收；雙指縮放、左右拖曳",UIFontTextStyleCaption1,UIColor.secondaryLabelColor);self.readout.accessibilityIdentifier=@"chart.readout";__weak typeof(self) weak=self;self.chart.readoutChanged=^(NSString *text){weak.readout.text=text;};
+    id averages=[SXStore.sharedStore valueForProfileKey:@"chart.averages" fallback:@[@5,@20]];self.chart.averages=[averages isKindOfClass:NSArray.class]?averages:@[@5,@20];
+    self.periodControl=[[UISegmentedControl alloc] initWithItems:@[@"日K",@"週K",@"15分"]];self.periodControl.selectedSegmentIndex=0;self.periodControl.accessibilityIdentifier=@"chart.period";[self.periodControl addTarget:self action:@selector(periodChanged) forControlEvents:UIControlEventValueChanged];
+    self.rangeControl=[[UISegmentedControl alloc] initWithItems:@[@"1月",@"3月",@"1年",@"全部"]];self.rangeControl.selectedSegmentIndex=1;self.rangeControl.accessibilityIdentifier=@"chart.range";[self.rangeControl addTarget:self action:@selector(rangeChanged) forControlEvents:UIControlEventValueChanged];
+    self.contentControl=[[UISegmentedControl alloc] initWithItems:@[@"價格圖表",@"基本面",@"技術指標",@"研究筆記"]];self.contentControl.selectedSegmentIndex=0;[self.contentControl addTarget:self action:@selector(contentChanged) forControlEvents:UIControlEventValueChanged];
+    UIButton *research=SXIconButton(@"建立研究",@"sparkles",[UIAction actionWithHandler:^(__kindof UIAction *action){[weak research];}]);research.accessibilityIdentifier=@"stock.research";
+    UIButton *star=SXIconButton(@"加入或移除自選",@"star",[UIAction actionWithHandler:^(__kindof UIAction *action){NSMutableArray *codes=[SXStore.sharedStore.watchCodes mutableCopy];if([codes containsObject:weak.code])[codes removeObject:weak.code];else[codes addObject:weak.code];[SXStore.sharedStore setWatchCodes:codes];}]);
+    self.navigationItem.rightBarButtonItems=@[[[UIBarButtonItem alloc] initWithCustomView:research],[[UIBarButtonItem alloc] initWithCustomView:star]];
+    self.refreshControl=[UIRefreshControl new];[self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(quoteChanged) name:SXQuotesDidChangeNotification object:nil];[self buildQuoteHeader];[self refresh];
+}
+- (void)dealloc {[NSNotificationCenter.defaultCenter removeObserver:self];}
+- (void)viewDidLayoutSubviews {[super viewDidLayoutSubviews];if(fabs(self.quoteHeader.bounds.size.width-self.tableView.bounds.size.width)>1)[self buildQuoteHeader];}
+- (void)quoteChanged {[self buildQuoteHeader];}
+- (void)buildQuoteHeader {
+    NSDictionary *stock=[SXStore.sharedStore stockForCode:self.code],*quote=SXStore.sharedStore.quotes[self.code];UIView *header=[[UIView alloc] initWithFrame:CGRectMake(0,0,self.tableView.bounds.size.width,170)];
+    UILabel *company=MarketLabel(stock[@"alias"]?:stock[@"name"]?:self.code,UIFontTextStyleSubheadline,UIColor.secondaryLabelColor);
+    UILabel *price=MarketLabel(SXMoney(quote[@"price"],[stock[@"market"] isEqual:@"TW"]?@"TWD":@"USD"),UIFontTextStyleLargeTitle,UIColor.labelColor);price.numberOfLines=1;price.adjustsFontSizeToFitWidth=YES;
+    UILabel *delta=MarketLabel(SXQuoteDelta(quote),UIFontTextStyleHeadline,SXChangeColor(MarketChange(quote)));UIStackView *values=MarketStack(@[price,delta],UILayoutConstraintAxisHorizontal,12);values.alignment=UIStackViewAlignmentFirstBaseline;
+    UILabel *time=MarketLabel([NSString stringWithFormat:@"%@ · %@",quote[@"source"]?:@"交易所來源",SXQuoteLabel(quote,[SXStore.sharedStore.quoteErrors containsObject:self.code])],UIFontTextStyleCaption1,UIColor.secondaryLabelColor);
+    [self.contentControl removeFromSuperview];UIStackView *stack=MarketStack(@[company,values,time,self.contentControl],UILayoutConstraintAxisVertical,9);MarketPin(stack,header,16);self.quoteHeader=header;self.tableView.tableHeaderView=header;
+}
+- (void)refresh {
+    [SXStore.sharedStore refreshQuotesForCodes:@[self.code] completion:^{[self.refreshControl endRefreshing];}];
+    [[SXMarketData shared] historyForCode:self.code completion:^(NSDictionary *value,NSError *error){if(value){self.rows=value[@"rows"]?:@[];self.source=value[@"source"];self.chart.rows=self.rows;[self.chart render];self.message=[NSString stringWithFormat:@"TradingView Lightweight Charts · %@ 日成交資料",self.source];}else self.message=error.localizedDescription?:@"圖表資料暫缺";[self.tableView reloadData];}];
+    NSString *symbol=[[SXStore.sharedStore sourceSymbolForCode:self.code] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet];
+    [[SXAPI sharedAPI] requestPath:[NSString stringWithFormat:@"/api/fundamentals?symbol=%@",symbol] method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){self.fields=!error&&[json[@"fields"] isKindOfClass:NSArray.class]?json[@"fields"]:@[];if(self.contentControl.selectedSegmentIndex==1)[self.tableView reloadData];}];
+}
+- (void)periodChanged {
+    if(self.periodControl.selectedSegmentIndex==2){NSDictionary *stock=[SXStore.sharedStore stockForCode:self.code];NSString *symbol=self.code;if([stock[@"market"] isEqual:@"TW"])symbol=[NSString stringWithFormat:@"%@:%@",[stock[@"exchange"] isEqual:@"上櫃"]?@"TPEX":@"TWSE",self.code];[self.chart showIntradayForSymbol:symbol];self.rangeControl.enabled=NO;}
+    else {self.rangeControl.enabled=YES;self.chart.period=self.periodControl.selectedSegmentIndex?@"week":@"day";[self.chart useLocalChart];}
+}
+- (void)rangeChanged {self.chart.visibleBars=[@[@22,@66,@252,@0][self.rangeControl.selectedSegmentIndex] integerValue];[self.chart render];[self.chart reset];}
+- (void)contentChanged {
+    if(self.contentControl.selectedSegmentIndex==3){self.contentControl.selectedSegmentIndex=0;SXNoteController *note=[SXNoteController new];note.code=self.code;[self.navigationController pushViewController:note animated:YES];return;}
+    SXTransition(self.tableView,^{[self.tableView reloadData];});
+}
+- (void)research {SXResearchController *controller=(SXResearchController *)((UINavigationController *)self.tabBarController.viewControllers[2]).viewControllers.firstObject;[controller openSetupForCode:self.code fromNavigation:self.navigationController];}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {return self.contentControl.selectedSegmentIndex==0?4:self.contentControl.selectedSegmentIndex==1?MAX(1,self.fields.count):3;}
+- (CGFloat)tableView:(UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)path {if(self.contentControl.selectedSegmentIndex==0){if(path.row==0||path.row==2)return 52;if(path.row==1)return MAX(250,MIN(340,self.view.bounds.size.height*.42));return UITableViewAutomaticDimension;}return UITableViewAutomaticDimension;}
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {return self.contentControl.selectedSegmentIndex==0?self.message:self.contentControl.selectedSegmentIndex==1?@"公開基本面資料；來源缺漏時保留空值。":@"以已載入的日 K 計算，不是模型預測。";}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
+    UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.selectionStyle=UITableViewCellSelectionStyleNone;cell.textLabel.numberOfLines=cell.detailTextLabel.numberOfLines=0;
+    if(self.contentControl.selectedSegmentIndex==0){
+        if(path.row==0){[self.periodControl removeFromSuperview];MarketPin(self.periodControl,cell.contentView,8);}
+        if(path.row==1){[self.chart removeFromSuperview];MarketPin(self.chart,cell.contentView,0);}
+        if(path.row==2){
+            __weak typeof(self) weak=self;UIButton *ma=SXIconButton(@"設定均線",@"slider.horizontal.3",[UIAction actionWithHandler:^(__kindof UIAction *a){[weak editAverages];}]);ma.accessibilityIdentifier=@"chart.indicators";
+            UIButton *reset=SXIconButton(@"重設圖表",@"arrow.counterclockwise",[UIAction actionWithHandler:^(__kindof UIAction *a){[weak.chart reset];}]);reset.accessibilityIdentifier=@"chart.reset";
+            UIButton *full=SXIconButton(@"全螢幕圖表",@"arrow.up.left.and.arrow.down.right",[UIAction actionWithHandler:^(__kindof UIAction *a){[weak fullscreen];}]);full.accessibilityIdentifier=@"chart.fullscreen";
+            [self.rangeControl removeFromSuperview];UIStackView *tools=MarketStack(@[self.rangeControl,ma,reset,full],UILayoutConstraintAxisHorizontal,5);tools.alignment=UIStackViewAlignmentCenter;MarketPin(tools,cell.contentView,4);
+        }
+        if(path.row==3){[self.readout removeFromSuperview];MarketPin(self.readout,cell.contentView,10);}
+    }else if(self.contentControl.selectedSegmentIndex==1){if(self.fields.count){NSDictionary *field=self.fields[path.row];cell.textLabel.text=[field[@"label"] description];cell.detailTextLabel.text=[field[@"value"] isKindOfClass:NSString.class]?field[@"value"]:@"資料暫缺";}else cell.textLabel.text=@"尚無可驗證基本面資料";}
+    else {NSArray *periods=@[@5,@20,@60];NSInteger n=[periods[path.row] integerValue];cell.textLabel.text=[NSString stringWithFormat:@"MA%ld 日均線",(long)n];if(self.rows.count>=(NSUInteger)n){double sum=0;for(NSDictionary *row in [self.rows subarrayWithRange:NSMakeRange(self.rows.count-n,n)])sum+=[row[@"close"] doubleValue];cell.detailTextLabel.text=SXFormatNumber(@(sum/n),2);}else cell.detailTextLabel.text=@"交易日資料不足";}
+    return cell;
+}
+- (void)editAverages {
+    if(self.periodControl.selectedSegmentIndex==2){SXShowError(self,@"TradingView 指標",@"15 分圖請使用圖表內的指標選單；日 K 與週 K 使用這裡保存的均線設定。");return;}
+    UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"均線週期" message:@"最多四條，1–500 期；留白隱藏。資料不足的均線不會補造。" preferredStyle:UIAlertControllerStyleAlert];
+    for(NSUInteger i=0;i<4;i++)[alert addTextFieldWithConfigurationHandler:^(UITextField *field){field.placeholder=[NSString stringWithFormat:@"均線 %lu",(unsigned long)i+1];field.keyboardType=UIKeyboardTypeNumberPad;field.text=i<self.chart.averages.count?[self.chart.averages[i] stringValue]:@"";field.accessibilityIdentifier=[NSString stringWithFormat:@"chart.ma.%lu",(unsigned long)i];}];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    UIAlertAction *save=[UIAlertAction actionWithTitle:@"套用" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action){NSMutableOrderedSet *periods=[NSMutableOrderedSet new];for(UITextField *field in alert.textFields){NSString *text=[field.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];if(!text.length)continue;NSScanner *scanner=[NSScanner scannerWithString:text];NSInteger value;if(![scanner scanInteger:&value]||!scanner.isAtEnd||value<1||value>500){SXShowError(self,@"週期無效",@"請輸入 1 到 500 的整數。");return;}[periods addObject:@(value)];}if(![SXStore.sharedStore setProfileValue:periods.array forKey:@"chart.averages"]){SXShowError(self,@"未儲存",@"請重試。");return;}self.chart.averages=periods.array;[self.chart render];}];save.accessibilityIdentifier=@"chart.ma.save";[alert addAction:save];[self presentViewController:alert animated:YES completion:nil];
+}
+- (void)fullscreen {SXChartFullscreenController *controller=[SXChartFullscreenController new];controller.chart=self.chart;__weak typeof(self) weak=self;controller.closed=^{weak.chart.translatesAutoresizingMaskIntoConstraints=YES;[weak.tableView reloadData];};UINavigationController *nav=[[UINavigationController alloc] initWithRootViewController:controller];nav.modalPresentationStyle=UIModalPresentationFullScreen;[self presentViewController:nav animated:YES completion:nil];}
+@end
+
+@interface SXNewsController () <UICalendarViewDelegate,UICalendarSelectionSingleDateDelegate>
+@property(nonatomic,strong) UISegmentedControl *scope;
+@property(nonatomic,strong) NSArray *items;
+@property(nonatomic,strong) NSArray *events;
+@property(nonatomic,copy) NSString *message;
+@property(nonatomic,copy) NSString *kind;
+@property(nonatomic) NSInteger days;
+@property(nonatomic,strong) UICalendarView *calendar;
+@property(nonatomic,copy) NSString *selectedDay;
+@end
+@implementation SXNewsController
+- (instancetype)init {return [super initWithStyle:UITableViewStyleInsetGrouped];}
+- (void)viewDidLoad {
+    [super viewDidLoad];self.title=@"情報";self.items=@[];self.events=@[];self.kind=@"all";self.days=7;self.tableView.rowHeight=UITableViewAutomaticDimension;self.tableView.estimatedRowHeight=100;self.tableView.backgroundColor=UIColor.systemGroupedBackgroundColor;
+    self.scope=[[UISegmentedControl alloc] initWithItems:@[@"自選",@"市場",@"日曆"]];self.scope.accessibilityIdentifier=@"news.scope";self.scope.selectedSegmentIndex=0;[self.scope addTarget:self action:@selector(scopeChanged) forControlEvents:UIControlEventValueChanged];
+    UIButton *filter=SXIconButton(@"篩選情報",@"line.3.horizontal.decrease",[UIAction actionWithHandler:^(__kindof UIAction *a){}]);filter.showsMenuAsPrimaryAction=YES;__weak typeof(self) weak=self;NSMutableArray *actions=[NSMutableArray new];for(NSArray *item in @[@[@"all",@"全部"],@[@"company",@"公司"],@[@"macro",@"政策與總經"],@[@"saved",@"已收藏"]])[actions addObject:[UIAction actionWithTitle:item[1] image:nil identifier:nil handler:^(__kindof UIAction *a){weak.kind=item[0];[weak.tableView reloadData];}]];filter.menu=[UIMenu menuWithChildren:actions];self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithCustomView:filter];
+    self.refreshControl=[UIRefreshControl new];[self.refreshControl addTarget:self action:@selector(refresh) forControlEvents:UIControlEventValueChanged];[self buildHeader];[self refresh];
+}
+- (void)buildHeader {
+    UIView *header=[[UIView alloc] initWithFrame:CGRectMake(0,0,self.tableView.bounds.size.width,self.scope.selectedSegmentIndex==2?355:58)];[self.scope removeFromSuperview];self.scope.frame=CGRectMake(20,8,MAX(260,header.bounds.size.width-40),34);self.scope.autoresizingMask=UIViewAutoresizingFlexibleWidth;[header addSubview:self.scope];
+    if(self.scope.selectedSegmentIndex==2){if(!self.calendar){self.calendar=[UICalendarView new];self.calendar.delegate=self;self.calendar.selectionBehavior=[[UICalendarSelectionSingleDate alloc] initWithDelegate:self];self.calendar.accessibilityIdentifier=@"news.calendar";self.calendar.locale=[NSLocale localeWithLocaleIdentifier:@"zh_TW"];}[self.calendar removeFromSuperview];self.calendar.frame=CGRectMake(16,54,header.bounds.size.width-32,295);self.calendar.autoresizingMask=UIViewAutoresizingFlexibleWidth;[header addSubview:self.calendar];}self.tableView.tableHeaderView=header;
+}
+- (void)scopeChanged {[self buildHeader];[self.tableView reloadData];[self refresh];}
+- (NSArray *)visibleItems {
+    if(self.scope.selectedSegmentIndex==2){if(!self.selectedDay.length)return self.events;return [self.events filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *item,NSDictionary *bindings){return [[item[@"date"] description] hasPrefix:self.selectedDay];}]];}
+    NSArray *saved=[SXStore.sharedStore valueForProfileKey:@"intel.bookmarks" fallback:@[]];return [self.items filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *item,NSDictionary *bindings){return [self.kind isEqual:@"all"]||([self.kind isEqual:@"saved"]?[saved containsObject:item[@"id"]?:item[@"url"]]:[item[@"kind"] isEqual:self.kind]);}]];
+}
+- (void)refresh {
+    self.message=@"正在整理公開情報…";NSArray *codes=self.scope.selectedSegmentIndex==0?SXStore.sharedStore.watchCodes:@[@"MARKET"];
+    if(!codes.count){self.items=@[];self.message=@"先加入自選股票，即可在這裡追蹤公司消息。";[self.refreshControl endRefreshing];[self.tableView reloadData];return;}
+    codes=[codes subarrayWithRange:NSMakeRange(0,MIN(4,codes.count))];NSInteger scope=self.scope.selectedSegmentIndex;__block NSUInteger pending=codes.count;NSMutableDictionary *items=[NSMutableDictionary new],*events=[NSMutableDictionary new];
+    for(NSString *code in codes){NSString *path=[NSString stringWithFormat:@"/api/news?symbol=%@&days=%ld",[[SXStore.sharedStore sourceSymbolForCode:code] stringByAddingPercentEncodingWithAllowedCharacters:NSCharacterSet.URLQueryAllowedCharacterSet],(long)self.days];
+        [[SXAPI sharedAPI] requestPath:path method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){
+            if(scope!=self.scope.selectedSegmentIndex)return;
+            if(!error&&[json isKindOfClass:NSDictionary.class]){for(NSDictionary *item in [json[@"items"] isKindOfClass:NSArray.class]?json[@"items"]:@[]){NSString *url=[item[@"url"] isKindOfClass:NSString.class]?item[@"url"]:@"",*source=[item[@"source"] description];if([url.lowercaseString containsString:@"yahoo."]||[source.lowercaseString containsString:@"yahoo"]||![item[@"titleZh"] isKindOfClass:NSString.class])continue;items[item[@"id"]?:url]=item;}for(NSDictionary *event in [json[@"upcoming"] isKindOfClass:NSArray.class]?json[@"upcoming"]:@[])if([event isKindOfClass:NSDictionary.class])events[[event[@"date"] description]?:@""]=event;}
+            if(--pending==0){self.items=[items.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [[b[@"date"] description] compare:[a[@"date"] description]];}];self.events=[events.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,NSDictionary *b){return [[a[@"date"] description] compare:[b[@"date"] description]];}];self.message=self.items.count?@"公開來源 · 長按收藏；點擊閱讀原文":@"目前沒有符合條件的中文情報。";[self.refreshControl endRefreshing];[self.tableView reloadData];}
+        }];
+    }
+}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {return MAX(1,[self visibleItems].count)+1;}
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {return self.scope.selectedSegmentIndex==2?@"BLS 等公開日程 · 台北時間":self.message;}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
+    NSArray *items=[self visibleItems];UITableViewCell *cell=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];cell.textLabel.numberOfLines=3;cell.textLabel.font=[UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];cell.detailTextLabel.numberOfLines=2;
+    if(path.row==MAX(1,items.count)){cell.textLabel.text=@"載入較早情報";cell.textLabel.textColor=self.view.tintColor;return cell;}
+    if(!items.count){cell.textLabel.text=self.scope.selectedSegmentIndex==2?@"這天沒有已取得的經濟事件":self.message;return cell;}
+    NSDictionary *item=items[path.row];cell.textLabel.text=item[@"titleZh"]?:item[@"nameZh"]?:item[@"title"]?:item[@"name"]?:@"經濟公告";cell.detailTextLabel.text=[NSString stringWithFormat:@"%@ · %@",item[@"source"]?:@"公開日程",SXDateLabel(item[@"date"])];cell.accessoryType=UITableViewCellAccessoryDisclosureIndicator;return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
+    [tableView deselectRowAtIndexPath:path animated:YES];NSArray *items=[self visibleItems];if(path.row==MAX(1,items.count)){self.days=MIN(90,self.days+14);[self refresh];return;}if(!items.count)return;
+    NSURL *url=[NSURL URLWithString:items[path.row][@"url"]?:@""];if([url.scheme isEqual:@"https"]&&!([url.host.lowercaseString containsString:@"yahoo."]))[self presentViewController:[[SFSafariViewController alloc] initWithURL:url] animated:YES completion:nil];
+}
+- (UIContextMenuConfiguration *)tableView:(UITableView *)tableView contextMenuConfigurationForRowAtIndexPath:(NSIndexPath *)path point:(CGPoint)point {
+    NSArray *items=[self visibleItems];if(path.row>=items.count)return nil;NSDictionary *item=items[path.row];NSString *identifier=item[@"id"]?:item[@"url"];if(!identifier)return nil;
+    return [UIContextMenuConfiguration configurationWithIdentifier:identifier previewProvider:nil actionProvider:^UIMenu *(NSArray *suggested){BOOL saved=[[SXStore.sharedStore valueForProfileKey:@"intel.bookmarks" fallback:@[]] containsObject:identifier];return [UIMenu menuWithChildren:@[[UIAction actionWithTitle:saved?@"取消收藏":@"收藏情報" image:[UIImage systemImageNamed:saved?@"bookmark.slash":@"bookmark"] identifier:nil handler:^(__kindof UIAction *action){NSMutableArray *bookmarks=[[SXStore.sharedStore valueForProfileKey:@"intel.bookmarks" fallback:@[]] mutableCopy];if([bookmarks containsObject:identifier])[bookmarks removeObject:identifier];else[bookmarks addObject:identifier];[SXStore.sharedStore setProfileValue:bookmarks forKey:@"intel.bookmarks"];[self.tableView reloadData];}]]];}];
+}
+- (void)dateSelection:(UICalendarSelectionSingleDate *)selection didSelectDate:(NSDateComponents *)dateComponents {self.selectedDay=dateComponents?[NSString stringWithFormat:@"%04ld-%02ld-%02ld",(long)dateComponents.year,(long)dateComponents.month,(long)dateComponents.day]:nil;[self.tableView reloadData];}
 @end

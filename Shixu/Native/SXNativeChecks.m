@@ -37,6 +37,7 @@ static void SXWriteCheckResult(NSArray *failures, NSInteger count) {
     NSData *json = [NSJSONSerialization dataWithJSONObject:result options:NSJSONWritingPrettyPrinted error:nil];
     [json writeToFile:[directory stringByAppendingPathComponent:@"native-self-test.json"] atomically:YES];
 }
+static UIView *SXFindCheckView(UIView *view,NSString *identifier){if([view.accessibilityIdentifier isEqual:identifier])return view;for(UIView *child in view.subviews){UIView *found=SXFindCheckView(child,identifier);if(found)return found;}return nil;}
 #endif
 
 void SXRunNativeChecks(void) {
@@ -90,7 +91,7 @@ void SXRunNativeChecks(void) {
     UISegmentedControl *currencySegment=[currencyPortfolio valueForKey:@"currencyControl"];
     check(currencySetup&&[[currencyPortfolio valueForKey:@"currency"] isEqual:@"TWD"]&&currencySegment.selectedSegmentIndex==1,@"Portfolio did not read the legacy nested currency when the root preference was absent");
     [store setSetting:@"USD" forKey:@"account.currency"];
-    [currencyHome tableView:currencyHome.tableView didSelectRowAtIndexPath:[NSIndexPath indexPathForRow:1 inSection:0]];
+    UIButton *twdButton=(UIButton *)SXFindCheckView(currencyHome.tableView.tableHeaderView,@"assets.TWD");[twdButton sendActionsForControlEvents:UIControlEventTouchUpInside];
     BOOL homeToTWD=currencyTabs.selectedIndex==3&&[[currencyPortfolio valueForKey:@"currency"] isEqual:@"TWD"]&&currencySegment.selectedSegmentIndex==1;
     currencySegment.selectedSegmentIndex=0;[currencySegment sendActionsForControlEvents:UIControlEventValueChanged];
     check(homeToTWD&&[[store valueForProfileKey:@"account.currency" fallback:@""] isEqual:@"USD"]&&[[currencyPortfolio valueForKey:@"currency"] isEqual:@"USD"]&&currencySegment.selectedSegmentIndex==0,@"Native Home TWD -> Portfolio -> USD flow used inconsistent currency preferences");

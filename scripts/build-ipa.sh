@@ -24,6 +24,7 @@ xcrun --sdk "$sdk_name" clang -arch "$arch" -target "$target" -isysroot "$sdk" "
  -framework SafariServices -framework Security -framework UniformTypeIdentifiers \
  Shixu/main.m Shixu/Native/*.m -o "$app/Shixu"
 cp Shixu/Directory.json "$app/Directory.json"
+cp -R Shixu/Resources/Chart "$app/Chart"
 if [[ "$mode" == simulator ]]; then cp Tests/Fixture*.plist "$app/"; fi
 cp Shixu/Info.plist "$app/Info.plist"
 # SideStore builds before 2026-09-12 send the raw display name to Apple's

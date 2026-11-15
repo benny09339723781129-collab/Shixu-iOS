@@ -189,6 +189,7 @@ static double SXResearchTime(id value) {
     }];
 }
 - (void)openSetupForCode:(NSString *)code { [self.navigationController pushViewController:[[SXResearchSetupController alloc] initWithCode:code ?: @""] animated:YES]; }
+- (void)openSetupForCode:(NSString *)code fromNavigation:(UINavigationController *)navigation { [navigation pushViewController:[[SXResearchSetupController alloc] initWithCode:code?:@""] animated:YES]; }
 - (void)openRun:(NSDictionary *)run { if ([run isKindOfClass:NSDictionary.class]) [self.navigationController pushViewController:[[SXReportController alloc] initWithRun:run] animated:YES]; }
 @end
 
@@ -201,12 +202,14 @@ static double SXResearchTime(id value) {
     self.codeField.placeholder = @"股票代號或公司名稱"; self.codeField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters; self.codeField.autocorrectionType = UITextAutocorrectionTypeNo;
     self.codeField.clearButtonMode = UITextFieldViewModeWhileEditing; self.codeField.returnKeyType = UIReturnKeyDone; self.codeField.delegate = self; self.codeField.text = self.initialCode;
     [self.codeField addTarget:self action:@selector(codeChanged) forControlEvents:UIControlEventEditingChanged]; self.codeField.accessibilityLabel = @"研究股票代號或公司名稱";
+    self.codeField.accessibilityIdentifier=@"research.code";
     if(self.planMode){self.codeField.enabled=NO;self.codeField.clearButtonMode=UITextFieldViewModeNever;}
     self.period = [[UISegmentedControl alloc] initWithItems:@[@"7 日", @"30 日", @"半年"]]; self.period.selectedSegmentIndex = 0; self.period.accessibilityLabel = @"研究期間";
     [self.period addTarget:self action:@selector(periodChanged) forControlEvents:UIControlEventValueChanged];
     self.period.enabled=!self.planMode;
     __weak typeof(self) weakSelf = self;
     self.beginButton = SXGlassButton(self.planMode?@"開始持股計畫研究":@"開始 AI 研究", @"sparkles", [UIAction actionWithHandler:^(__kindof UIAction *action) { (void)action; [weakSelf beginResearch]; }]);
+    self.beginButton.accessibilityIdentifier=@"research.start";
     UIView *footer = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 96)]; self.beginButton.translatesAutoresizingMaskIntoConstraints = NO; [footer addSubview:self.beginButton];
     [NSLayoutConstraint activateConstraints:@[[self.beginButton.leadingAnchor constraintEqualToAnchor:footer.leadingAnchor constant:20], [self.beginButton.trailingAnchor constraintEqualToAnchor:footer.trailingAnchor constant:-20], [self.beginButton.topAnchor constraintEqualToAnchor:footer.topAnchor constant:16], [self.beginButton.heightAnchor constraintGreaterThanOrEqualToConstant:50]]];
     self.tableView.tableFooterView = footer; [self codeChanged];
@@ -252,12 +255,23 @@ static double SXResearchTime(id value) {
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath { [tableView deselectRowAtIndexPath:indexPath animated:YES]; if (indexPath.section == 1) { self.codeField.text = SXResearchText(self.matches[indexPath.row][@"code"]); [self.codeField resignFirstResponder]; [self codeChanged]; } }
 - (void)setBusy:(BOOL)busy { self.submitting = busy; self.beginButton.enabled = !busy && [SXStore.sharedStore stockForCode:self.selectedCode] != nil; self.codeField.enabled = !busy&&!self.planMode; self.period.enabled = !busy&&!self.planMode; }
 - (void)beginResearch {
+    if(self.submitting)return;
+    [self setBusy:YES];NSString *expected=SXStore.sharedStore.activeProfileUserID;NSUInteger revision=SXAPI.sharedAPI.identityRevision;__weak typeof(self) weakSelf=self;
+    [SXAPI.sharedAPI requestPath:@"/api/account/status" method:@"GET" body:nil completion:^(id json,NSInteger status,NSError *error){
+        typeof(self) self=weakSelf;if(!self||!SXResearchWorkspaceMatches(expected))return;[self setBusy:NO];
+        BOOL valid=[json isKindOfClass:NSDictionary.class]&&[json[@"signedIn"] isKindOfClass:NSNumber.class];id user=valid?json[@"user"]:nil;NSString *identity=[user isKindOfClass:NSDictionary.class]?SXResearchText(user[@"id"]):@"";BOOL signedIn=valid&&[json[@"signedIn"] isEqual:@YES];NSError *workspaceError=nil;
+        if(error||status!=200||!valid||revision!=SXAPI.sharedAPI.identityRevision||(signedIn&&!identity.length)||![SXStore.sharedStore activateProfileForUserID:signedIn?identity:nil error:&workspaceError]){SXShowError(self,@"帳號尚未確認",error.localizedDescription?:workspaceError.localizedDescription?:@"請稍後重試，這次沒有啟動分析。");return;}
+        SXStore.sharedStore.accountIdentityResolved=YES;if(SXResearchWorkspaceMatches(expected)&&self.viewIfLoaded.window)[self beginVerifiedResearch];
+    }];
+}
+- (void)beginVerifiedResearch {
     if (self.submitting) return;
+    NSUInteger identityRevision=SXAPI.sharedAPI.identityRevision;
     NSString *code = self.selectedCode; if (![SXStore.sharedStore stockForCode:code]) { SXShowError(self, @"請選取股票", @"輸入有效代號，或點選搜尋結果。 "); return; }
     [self.view endEditing:YES]; [self setBusy:YES]; NSInteger days = [self days];
     __weak typeof(self) weakSelf = self;NSString *workspace=[SXStore.sharedStore.activeProfileUserID copy];
     [SXAPI.sharedAPI requestPath:@"/api/research/status" method:@"GET" body:nil completion:^(id json, NSInteger status, NSError *error) {
-        typeof(self) self = weakSelf; if (!self||!SXResearchWorkspaceMatches(workspace)) return;
+        typeof(self) self = weakSelf; if (!self||(identityRevision!=SXAPI.sharedAPI.identityRevision||!SXResearchWorkspaceMatches(workspace))) return;
         NSDictionary *health = [json isKindOfClass:NSDictionary.class] ? json : @{};
         if (error || status != 200 || ![health[@"ready"] isEqual:@YES]) { [self setBusy:NO]; SXShowError(self, @"分析暫時無法啟動", error.localizedDescription ?: (SXResearchText(health[@"error"]).length ? health[@"error"] : @"分析後台尚未就緒，沒有呼叫付費模型。")); return; }
         NSDictionary *position=self.planMode?[self heldPosition]:nil;id savedRequests=[SXStore.sharedStore valueForProfileKey:@"nexa.requests" fallback:@{}];if(self.planMode&&(!position||([savedRequests isKindOfClass:NSDictionary.class]&&SXResearchText(savedRequests[code]).length))){[self setBusy:NO];SXShowError(self,@"暫時無法建立",@"目前持股已變更，或已有同股計畫正在進行。請返回持股計畫查看。");return;}
@@ -270,7 +284,7 @@ static double SXResearchTime(id value) {
         SXReportController *report = [[SXReportController alloc] initWithRun:pending]; [self.navigationController pushViewController:report animated:YES];
         NSDictionary *body = @{@"id": runID, @"code": code, @"symbol": [SXStore.sharedStore sourceSymbolForCode:code], @"days": @(days), @"kind":kind, @"position":position?:NSNull.null};
         [SXAPI.sharedAPI requestPath:@"/api/research" method:@"POST" body:body completion:^(id response, NSInteger responseStatus, NSError *submitError) {
-            if(!SXResearchWorkspaceMatches(workspace))return;
+            if((identityRevision!=SXAPI.sharedAPI.identityRevision||!SXResearchWorkspaceMatches(workspace)))return;
             NSDictionary *value = [response isKindOfClass:NSDictionary.class] ? response : @{};
             BOOL completed=!submitError&&responseStatus>=200&&responseStatus<300&&[SXReportController validateCompletedRun:value forRequest:pending allowReusedPlan:[kind isEqual:@"plan"]];
             if([kind isEqual:@"plan"]&&completed){BOOL archived=[SXReportController archiveNexaRun:value forCode:code requestID:runID];if(archived){[SXStore.sharedStore upsertRun:value];[report displayArchivedRun:value];}else SXShowError(report,@"封存尚未保存完成",@"請先匯出原始研究保留副本，再重新查詢同一請求。");[weakSelf setBusy:NO];return;}

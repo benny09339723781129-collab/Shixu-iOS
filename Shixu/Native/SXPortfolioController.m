@@ -1,6 +1,7 @@
 #import "SXPortfolioController.h"
 #import "SXStore.h"
 #import "SXUI.h"
+#import "SXMarketController.h"
 #import <math.h>
 
 static NSArray<NSDictionary *> *SXPortfolioRows(id value) {
@@ -211,9 +212,9 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     [NSLayoutConstraint activateConstraints:@[[self.currencyControl.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:20], [self.currencyControl.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-20], [self.currencyControl.topAnchor constraintEqualToAnchor:header.topAnchor constant:12], [self.currencyControl.heightAnchor constraintGreaterThanOrEqualToConstant:36]]];
     self.tableView.tableHeaderView = header;
     __weak typeof(self) weakSelf = self;
-    self.sortButton = SXGlassButton(@"排序", @"arrow.up.arrow.down", [UIAction actionWithHandler:^(__kindof UIAction *action) {}]);
+    self.sortButton = SXIconButton(@"排序", @"arrow.up.arrow.down", [UIAction actionWithHandler:^(__kindof UIAction *action) {}]);
     self.sortButton.showsMenuAsPrimaryAction = YES;
-    UIButton *add = SXGlassButton(@"新增", @"plus", [UIAction actionWithHandler:^(__kindof UIAction *action) { [weakSelf addTapped]; }]);
+    UIButton *add = SXIconButton(@"新增", @"plus", [UIAction actionWithHandler:^(__kindof UIAction *action) { [weakSelf addTapped]; }]);
     self.navigationItem.rightBarButtonItems = @[[[UIBarButtonItem alloc] initWithCustomView:add], [[UIBarButtonItem alloc] initWithCustomView:self.sortButton]];
     self.refreshControl = [UIRefreshControl new];
     [self.refreshControl addTarget:self action:@selector(refreshQuotes) forControlEvents:UIControlEventValueChanged];
@@ -310,17 +311,21 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     self.sortButton.menu = [UIMenu menuWithTitle:@"持股排序" children:actions];
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 5; }
+- (NSInteger)logicalSection:(NSInteger)section {return [@[@0,@2,@1,@3,@4][section] integerValue];}
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 5;
+    section=[self logicalSection:section];
+    if (section == 0) return 1;
     if (section == 1) return MAX((NSInteger)self.allocation.count, 1);
     if (section == 2) return MAX((NSInteger)self.positions.count, 1);
     if (section == 3) return MAX((NSInteger)self.cashEntries.count, 1);
     return 1;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    section=[self logicalSection:section];
     return @[@"資產總覽", @"資產配置", @"目前持股", @"可用資金帳", @"備份"][(NSUInteger)section];
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    section=[self logicalSection:section];
     if (section == 0) {
         NSString *coverage = [self.summary[@"total"] integerValue] ? [NSString stringWithFormat:@"已取得 %@ / %@ 檔行情。", self.summary[@"priced"], self.summary[@"total"]] : @"尚未登錄持股。";
         return [self.summary[@"stale"] integerValue] ? [coverage stringByAppendingFormat:@"%@ 檔更新暫停，估值採上次報價。", self.summary[@"stale"]] : [coverage stringByAppendingString:@"下拉可更新。美股與台股分幣別計算。"];
@@ -330,7 +335,7 @@ static NSNumber *SXPortfolioInput(NSString *text) {
         for (NSDictionary *item in self.allocation) if (SXPortfolioText(item[@"code"]).length) return [NSString stringWithFormat:@"最大持股 %@，占同幣別資產 %@%%。%@", item[@"code"], SXFormatNumber(item[@"weight"], 2), note];
         return note;
     }
-    if (section == 2) return @"點選編輯持股，向左滑動可移除紀錄。這裡只記錄持股，不會執行交易。";
+    if (section == 2) return @"點持股看盤；左滑可編輯或移除紀錄。";
     if (section == 3) return @"資金與持股分別記錄，不會自動扣除買進金額。點選可編輯，向左滑動可刪除。";
     return @"原生分享可將紀錄存入「檔案」或傳送至你指定的位置。";
 }
@@ -345,16 +350,16 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     return cell;
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    indexPath=[NSIndexPath indexPathForRow:indexPath.row inSection:[self logicalSection:indexPath.section]];
     NSInteger row = indexPath.row;
     if (indexPath.section == 0) {
-        NSArray *titles = @[@"資產估值", @"可用資金", @"持股成本", @"持股市值", @"未實現損益"];
-        NSArray *keys = @[@"assets", @"cash", @"cost", @"value", @"pnl"];
-        NSString *value = SXMoney(self.summary[keys[row]], self.currency);
-        if (row == 4 && SXFiniteNumber(self.summary[@"return"])) value = [value stringByAppendingFormat:@"（%@%%）", SXFormatNumber(self.summary[@"return"], 2)];
-        UITableViewCell *cell = [self cellWithTitle:titles[row] detail:value symbol:@[@"chart.pie", @"banknote", @"sum", @"chart.bar", @"plus.forwardslash.minus"][(NSUInteger)row] disclosure:NO];
-        if (row == 0) { cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline]; cell.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2]; cell.detailTextLabel.textColor = UIColor.labelColor; }
-        if (row == 4 && SXFiniteNumber(self.summary[@"pnl"])) cell.detailTextLabel.textColor = [self.summary[@"pnl"] doubleValue] >= 0 ? UIColor.systemGreenColor : UIColor.systemRedColor;
-        return cell;
+        UITableViewCell *card=[[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];card.selectionStyle=UITableViewCellSelectionStyleNone;card.accessibilityIdentifier=@"portfolio.summary";
+        UILabel *label=[UILabel new];label.text=@"總資產";label.font=[UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];label.textColor=UIColor.secondaryLabelColor;
+        UILabel *assets=[UILabel new];assets.text=SXMoney(self.summary[@"assets"],self.currency);assets.font=[UIFont preferredFontForTextStyle:UIFontTextStyleLargeTitle];assets.adjustsFontForContentSizeCategory=YES;assets.numberOfLines=0;
+        UILabel *cash=[UILabel new];cash.text=[NSString stringWithFormat:@"可用資金  %@",SXMoney(self.summary[@"cash"],self.currency)];cash.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];cash.numberOfLines=0;
+        UILabel *pnl=[UILabel new];pnl.text=[NSString stringWithFormat:@"持股損益  %@%@",SXMoney(self.summary[@"pnl"],self.currency),SXFiniteNumber(self.summary[@"return"])?[NSString stringWithFormat:@"（%@%%）",SXFormatNumber(self.summary[@"return"],2)]:@""];pnl.font=[UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];pnl.textColor=SXFiniteNumber(self.summary[@"pnl"])?SXChangeColor([self.summary[@"pnl"] doubleValue]):UIColor.secondaryLabelColor;pnl.numberOfLines=0;
+        UIStackView *stack=[[UIStackView alloc] initWithArrangedSubviews:@[label,assets,cash,pnl]];stack.axis=UILayoutConstraintAxisVertical;stack.spacing=8;stack.translatesAutoresizingMaskIntoConstraints=NO;[card.contentView addSubview:stack];[NSLayoutConstraint activateConstraints:@[[stack.topAnchor constraintEqualToAnchor:card.contentView.topAnchor constant:16],[stack.bottomAnchor constraintEqualToAnchor:card.contentView.bottomAnchor constant:-16],[stack.leadingAnchor constraintEqualToAnchor:card.contentView.leadingAnchor constant:18],[stack.trailingAnchor constraintEqualToAnchor:card.contentView.trailingAnchor constant:-18]]];return card;
+
     }
     if (indexPath.section == 1) {
         if (!self.allocation.count) return [self cellWithTitle:![self.summary[@"complete"] boolValue] ? @"等待完整行情" : [self.summary[@"cash"] doubleValue] < 0 ? @"可用資金為負數" : @"尚無資產配置" detail:![self.summary[@"complete"] boolValue] ? @"可下拉更新，來源失敗時不會補造價格。" : [self.summary[@"cash"] doubleValue] < 0 ? @"保留實際資金餘額，配置比例暫不顯示。" : @"新增資金或持股後，即可查看配置。" symbol:@"chart.pie" disclosure:NO];
@@ -367,7 +372,7 @@ static NSNumber *SXPortfolioInput(NSString *text) {
         NSDictionary *stock = [self.store stockForCode:code], *quote = [self validQuoteForCode:code];
         NSString *name = SXPortfolioText(stock[@"alias"]).length ? stock[@"alias"] : SXPortfolioText(stock[@"name"]);
         NSString *detail = [NSString stringWithFormat:@"%@ 股 · 成本 %@\n%@", SXFormatNumber(position[@"quantity"], 4), SXMoney(position[@"cost"], self.currency), quote ? [NSString stringWithFormat:@"現價 %@ · 市值 %@\n%@", SXMoney(quote[@"price"], self.currency), SXMoney(@([quote[@"price"] doubleValue] * SXPortfolioValue(position[@"quantity"])), self.currency), SXQuoteLabel(quote, [self.store.quoteErrors containsObject:code])] : [self.store.quoteErrors containsObject:code] ? @"行情來源暫缺，請下拉重試。" : @"行情尚未取得。"];
-        return [self cellWithTitle:[NSString stringWithFormat:@"%@ %@", code, name] detail:detail symbol:@"chart.xyaxis.line" disclosure:YES];
+        UITableViewCell *cell=[self cellWithTitle:[NSString stringWithFormat:@"%@ %@", code, name] detail:detail symbol:@"chart.xyaxis.line" disclosure:YES];cell.accessibilityIdentifier=[@"holding." stringByAppendingString:code];return cell;
     }
     if (indexPath.section == 3) {
         if (!self.cashEntries.count) return [self cellWithTitle:@"尚無資金紀錄" detail:@"可以新增目前可用資金，或記錄資金增減。" symbol:@"banknote" disclosure:NO];
@@ -378,7 +383,8 @@ static NSNumber *SXPortfolioInput(NSString *text) {
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section == 2 && self.positions.count) [self showRecord:self.positions[(NSUInteger)indexPath.row] cash:NO];
+    indexPath=[NSIndexPath indexPathForRow:indexPath.row inSection:[self logicalSection:indexPath.section]];
+    if (indexPath.section == 2 && self.positions.count) [self.navigationController pushViewController:[[SXStockController alloc] initWithCode:self.positions[(NSUInteger)indexPath.row][@"code"]] animated:YES];
     if (indexPath.section == 3 && self.cashEntries.count) [self showRecord:self.cashEntries[(NSUInteger)indexPath.row] cash:YES];
     if (indexPath.section == 4) [self exportAccount];
 }
@@ -421,12 +427,14 @@ static NSNumber *SXPortfolioInput(NSString *text) {
     [self.navigationController popToViewController:self animated:YES]; [self rebuild]; [self refreshQuotes];
 }
 - (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    indexPath=[NSIndexPath indexPathForRow:indexPath.row inSection:[self logicalSection:indexPath.section]];
     BOOL cash = indexPath.section == 3;
     if ((!cash && indexPath.section != 2) || (cash ? !self.cashEntries.count : !self.positions.count)) return nil;
     NSDictionary *record = cash ? self.cashEntries[(NSUInteger)indexPath.row] : self.positions[(NSUInteger)indexPath.row];
     __weak typeof(self) weakSelf = self;
-    UIContextualAction *remove = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"刪除" handler:^(UIContextualAction *action, UIView *sourceView, void (^completion)(BOOL)) { completion(NO); [weakSelf confirmDelete:record cash:cash]; }];
-    remove.image = [UIImage systemImageNamed:@"trash"]; UISwipeActionsConfiguration *configuration = [UISwipeActionsConfiguration configurationWithActions:@[remove]];
+    UIContextualAction *remove = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"移除" handler:^(UIContextualAction *action, UIView *sourceView, void (^completion)(BOOL)) { completion(NO); [weakSelf confirmDelete:record cash:cash]; }];
+    UIContextualAction *edit=[UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"編輯" handler:^(__kindof UIContextualAction *action,UIView *view,void (^done)(BOOL)){done(YES);[weakSelf showRecord:record cash:cash];}];edit.image=[UIImage systemImageNamed:@"pencil"];
+    remove.image = [UIImage systemImageNamed:@"trash"]; UISwipeActionsConfiguration *configuration = [UISwipeActionsConfiguration configurationWithActions:@[remove,edit]];
     configuration.performsFirstActionWithFullSwipe = NO; return configuration;
 }
 - (void)confirmDelete:(NSDictionary *)record cash:(BOOL)cash {

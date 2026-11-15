@@ -1,3 +1,3 @@
-#import <UIKit/UIKit.h>
-@interface SXHomeController : UITableViewController
+#import "SXMarketController.h"
+@interface SXHomeController : SXMarketController
 @end

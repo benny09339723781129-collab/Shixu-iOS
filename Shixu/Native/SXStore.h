@@ -13,6 +13,7 @@ FOUNDATION_EXPORT NSNotificationName const SXQuotesDidChangeNotification;
 @property(nonatomic,readonly) NSArray<NSDictionary *> *directory;
 @property(nonatomic,readonly,nullable) NSString *persistenceError;
 @property(nonatomic,readonly,copy,nullable) NSString *activeProfileUserID;
+@property(nonatomic) BOOL accountIdentityResolved;
 - (BOOL)activateProfileForUserID:(nullable NSString *)userID error:(NSError **)error;
 - (BOOL)copyLocalProfileToActiveAccount:(NSError **)error;
 - (id)valueForProfileKey:(NSString *)key fallback:(id)fallback;

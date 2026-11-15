@@ -1,9 +1,11 @@
 #import "SXAPI.h"
+#import "SXStore.h"
 #import <WebKit/WebKit.h>
 
 NSString *const SXOrigin=@"https://trend-forecast.pc-remote-worker.workers.dev";
 @interface SXAPI ()
 @property(nonatomic,strong) NSURLSession *session;
+@property(atomic) NSUInteger identityRevision;
 @end
 @implementation SXAPI
 + (instancetype)sharedAPI { static SXAPI *api; static dispatch_once_t once; dispatch_once(&once,^{api=[SXAPI new];});return api; }
@@ -29,7 +31,7 @@ NSString *const SXOrigin=@"https://trend-forecast.pc-remote-worker.workers.dev";
   if(data.length>16*1024*1024)error=[NSError errorWithDomain:@"SXAPI" code:2 userInfo:@{NSLocalizedDescriptionKey:@"資料過大，請稍後重試。"}];
   else if(data.length)json=[NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
   if(!error&&(status<200||status>=300||!json)){NSString *message=[json isKindOfClass:NSDictionary.class]&&[json[@"error"] isKindOfClass:NSString.class]?json[@"error"]:@"服務暫時無法回應，原有資料仍保留。";error=[NSError errorWithDomain:@"SXAPI" code:status userInfo:@{NSLocalizedDescriptionKey:message}];}
-  if(!error&&([path isEqualToString:@"/api/account/native-exchange"]||[path isEqualToString:@"/api/account/sign-out"]))[NSUserDefaults.standardUserDefaults setBool:YES forKey:@"native-cookie-import-v1"];
+  if(!error&&([path isEqualToString:@"/api/account/native-exchange"]||[path isEqualToString:@"/api/account/sign-out"])) { [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"native-cookie-import-v1"];dispatch_async(dispatch_get_main_queue(),^{self.identityRevision+=1;SXStore.sharedStore.accountIdentityResolved=NO;}); }
   if(!error&&[path isEqualToString:@"/api/account/sign-out"]){NSString *host=[NSURL URLWithString:SXOrigin].host;for(NSHTTPCookie *cookie in [NSHTTPCookieStorage.sharedHTTPCookieStorage cookiesForURL:[NSURL URLWithString:SXOrigin]])if([cookie.name hasPrefix:@"shiye_account."])[NSHTTPCookieStorage.sharedHTTPCookieStorage deleteCookie:cookie];[WKWebsiteDataStore.defaultDataStore.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies){dispatch_group_t group=dispatch_group_create();for(NSHTTPCookie *cookie in cookies)if([cookie.domain.lowercaseString isEqualToString:host]&&[cookie.name hasPrefix:@"shiye_account."]){dispatch_group_enter(group);[WKWebsiteDataStore.defaultDataStore.httpCookieStore deleteCookie:cookie completionHandler:^{dispatch_group_leave(group);}];}dispatch_group_notify(group,dispatch_get_main_queue(),^{completion(json,status,error);});}];return;}
   dispatch_async(dispatch_get_main_queue(),^{completion(json,status,error);});
  }] resume];
