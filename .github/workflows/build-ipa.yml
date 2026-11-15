@@ -2,7 +2,7 @@ name: Build iOS IPA
 on:
   workflow_dispatch:
   push:
-    paths: ['Shixu/**', 'scripts/**', '.github/workflows/build-ipa.yml']
+    paths: ['Shixu/**', 'scripts/**', 'UITests/**', 'Tests/**', 'project.yml', '.github/workflows/build-ipa.yml']
 permissions:
   contents: read
 concurrency:
@@ -11,18 +11,85 @@ concurrency:
 jobs:
   build:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Compile the existing native shell without Apple signing credentials
+      - name: Select the newest installed Xcode
+        run: |
+          developer_app="$(find /Applications -maxdepth 1 -name 'Xcode*.app' | sort -V | tail -1)"
+          sudo xcode-select -s "$developer_app/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Generate isolated simulator fixtures
+        run: node scripts/generate-fixtures.mjs
+      - name: Check chart calculations and archived price fidelity
+        run: node --test scripts/chart-core.test.mjs
+      - name: Compile native iOS app without Apple signing credentials
+        id: native_compile
         run: bash scripts/build-ipa.sh
+      - name: Verify native simulator launch and screens
+        run: bash scripts/verify-simulator.sh
+      - name: Exercise real non-Yahoo market providers
+        id: market_sources
+        continue-on-error: true
+        run: bash scripts/verify-market-sources.sh
+      - name: Prepare official XcodeGen 2.46.0
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v xcodegen >/dev/null 2>&1 && xcodegen --version | grep -Eq '(^|[^0-9])2\.46\.0([^0-9]|$)'; then
+            xcodegen --version
+            exit 0
+          fi
+          tool_dir="$RUNNER_TEMP/shixu-xcodegen-2.46.0"
+          mkdir -p "$tool_dir/bin" "$tool_dir/unpacked"
+          archive="$tool_dir/xcodegen.zip"
+          curl --fail --location --retry 2 --retry-delay 2 --connect-timeout 15 --max-time 120 \
+            --proto '=https' --tlsv1.2 \
+            'https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip' \
+            --output "$archive"
+          # SHA-256 published by the official 2.46.0 GitHub release asset API.
+          printf '%s  %s\n' '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806' "$archive" | shasum -a 256 -c -
+          ditto -x -k "$archive" "$tool_dir/unpacked"
+          binary="$(find "$tool_dir/unpacked" -type f -name xcodegen -print -quit)"
+          test -n "$binary"
+          install -m 755 "$binary" "$tool_dir/bin/xcodegen"
+          "$tool_dir/bin/xcodegen" --version
+          echo "$tool_dir/bin" >> "$GITHUB_PATH"
+      - name: Exercise native UI journeys and record interactions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/ui-tests
+          bash scripts/test-ui.sh 2>&1 | tee build/ui-tests/test-ui.log
+      - name: Require genuine provider evidence
+        if: always() && steps.native_compile.outcome == 'success'
+        run: python3 -c 'import json; r=json.load(open("build/market-provider-smoke.json")); print(r); assert r["passed"] and not r["fixtureMode"],r'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
         with:
           name: Shixu-iOS-unsigned
           path: |
             build/Shixu-unsigned.ipa
             build/SHA256SUMS.txt
+            build/native-self-test.json
+            build/market-provider-smoke.json
+            build/screenshots/*.png
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: Shixu-iOS-UI-journeys
+          path: |
+            build/ui-tests/**/*.log
+            build/ui-tests/**/summary.json
+            build/ui-tests/**/*.xcresult/**
+            build/ui-tests/**/*-screenshots/**
+            build/ui-tests/**/*-journeys.mp4
+            !build/ui-tests/**/DerivedData/**
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 3
